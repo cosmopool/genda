@@ -588,6 +588,293 @@ static int pack_events(const char *since, const char *until, MPW *w) {
   return 0;
 }
 
+// ---- classify -----------------------------------------------------------
+// One crux: LLM when configured, keyword heuristic otherwise (or on failure).
+// Stores nothing itself; returns 1 when an event row should be written.
+
+typedef struct {
+  char title[512], starts_at[64], deadline[64], location[256], kind[16];
+  double confidence;
+} Classified;
+
+static void lower_copy(const char *src, char *dst, size_t cap) {
+  size_t i = 0;
+  for (; src[i] && i + 1 < cap; i++) dst[i] = (char)tolower((unsigned char)src[i]);
+  dst[i] = 0;
+}
+
+static int contains_any(const char *hay, const char *words[]) {
+  for (int i = 0; words[i]; i++)
+    if (strstr(hay, words[i])) return 1;
+  return 0;
+}
+
+// First YYYY-MM-DD([T ]HH:MM) occurrence -> out. Returns 1 found.
+static int scan_iso_date(const char *s, char *out, size_t cap) {
+  for (; *s; s++) {
+    int Y, M, D, h = -1, m = -1;
+    if (sscanf(s, "%4d-%2d-%2d", &Y, &M, &D) == 3 && Y >= 2020 && Y <= 2100 && M >= 1 &&
+        M <= 12 && D >= 1 && D <= 31) {
+      if ((s[10] == 'T' || s[10] == ' ') && sscanf(s + 11, "%2d:%2d", &h, &m) == 2 && h >= 0 &&
+          h < 24 && m >= 0 && m < 60)
+        snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:00Z", Y, M, D, h, m);
+      else
+        snprintf(out, cap, "%04d-%02d-%02dT00:00:00Z", Y, M, D);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void classify_heuristic(const Input *in, Classified *c) {
+  memset(c, 0, sizeof *c);
+  snprintf(c->title, sizeof c->title, "%s", in->title[0] ? in->title : in->text);
+  char hay[4608];
+  char tmp[4608];
+  snprintf(tmp, sizeof tmp, "%s %s", in->title, in->text);
+  lower_copy(tmp, hay, sizeof hay);
+  static const char *appt[] = {"meeting",  "appointment", "call",     "interview", "dentist",
+                               "doctor",   "flight",      "booking",  "reservation", "conference",
+                               "webinar",  "standup",     "ceremony", "party",     NULL};
+  static const char *oblg[] = {"deadline", "due",     "invoice", "bill",   "pay",
+                               "rent",     "tax",     "submit",  "renew",  "expir",
+                               "overdue",  "payment", "fine",    NULL};
+  if (contains_any(hay, appt)) {
+    snprintf(c->kind, sizeof c->kind, "appointment");
+    c->confidence = 0.45;
+  } else if (contains_any(hay, oblg)) {
+    snprintf(c->kind, sizeof c->kind, "obligation");
+    c->confidence = 0.45;
+  } else {
+    snprintf(c->kind, sizeof c->kind, "none");
+    return;
+  }
+  char dt[64] = "";
+  if (scan_iso_date(in->title, dt, sizeof dt) || scan_iso_date(in->text, dt, sizeof dt)) {
+    if (!strcmp(c->kind, "obligation") && (strstr(hay, "deadline") || strstr(hay, "due")))
+      snprintf(c->deadline, sizeof c->deadline, "%s", dt);
+    else
+      snprintf(c->starts_at, sizeof c->starts_at, "%s", dt);
+  }
+}
+
+// --- tiny JSON scanners (LLM boundary only) ---
+
+static int json_string(const char *js, const char *key, char *out, size_t cap) {
+  char pat[64];
+  snprintf(pat, sizeof pat, "\"%s\"", key);
+  const char *p = strstr(js, pat);
+  if (!p) return -1;
+  p = strchr(p + strlen(pat), ':');
+  if (!p) return -1;
+  p++;
+  while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+  if (*p == 'n' && !strncmp(p, "null", 4)) {
+    out[0] = 0;
+    return 0;
+  }
+  if (*p != '"') return -1;
+  p++;
+  size_t o = 0;
+  while (*p && *p != '"' && o + 1 < cap) {
+    if (*p == '\\' && p[1]) {
+      p++;
+      char e = *p++;
+      out[o++] = e == 'n' ? '\n' : e == 't' ? '\t' : e;
+    } else {
+      out[o++] = *p++;
+    }
+  }
+  out[o] = 0;
+  return *p == '"' ? 0 : -1;
+}
+
+static int json_number(const char *js, const char *key, double *out) {
+  char pat[64];
+  snprintf(pat, sizeof pat, "\"%s\"", key);
+  const char *p = strstr(js, pat);
+  if (!p) return -1;
+  p = strchr(p + strlen(pat), ':');
+  if (!p) return -1;
+  *out = atof(p + 1);
+  return 0;
+}
+
+typedef struct {
+  char *p;
+  size_t len, cap;
+} StrBuf;
+
+static size_t llm_sink(void *ptr, size_t size, size_t n, void *ud) {
+  StrBuf *b = ud;
+  size_t want = size * n;
+  if (b->len + want + 1 > b->cap) {
+    if (b->cap >= 65536) return 0;
+    size_t ncap = b->cap ? b->cap * 2 : 4096;
+    while (ncap < b->len + want + 1) ncap *= 2;
+    if (ncap > 65537) ncap = 65537;
+    char *np = realloc(b->p, ncap);
+    if (!np) return 0;
+    b->p = np;
+    b->cap = ncap;
+  }
+  memcpy(b->p + b->len, ptr, want);
+  b->len += want;
+  b->p[b->len] = 0;
+  return want;
+}
+
+static void json_escape(const char *src, StrBuf *b) {
+  for (; *src; src++) {
+    switch (*src) {
+    case '"':
+      if (b->len + 2 <= b->cap) {
+        b->p[b->len++] = '\\';
+        b->p[b->len++] = '"';
+      }
+      break;
+    case '\\':
+    case '\n':
+    case '\r':
+    case '\t': {
+      if (b->len + 2 > b->cap) return;
+      b->p[b->len++] = '\\';
+      b->p[b->len++] = *src == '\\' ? '\\' : *src == '\n' ? 'n' : *src == '\r' ? 'r' : 't';
+      break;
+    }
+    default:
+      if (b->len + 1 <= b->cap) b->p[b->len++] = *src;
+    }
+  }
+}
+
+// Try the LLM. Returns 0 on usable classification (even kind=none).
+static int classify_llm(const Input *in, Classified *c) {
+  const char *url = getenv("LLM_API_URL");
+  if (!url || !*url) return -1;
+  const char *key = getenv("LLM_API_KEY");
+  const char *model = env_or("LLM_MODEL", "gpt-4o-mini");
+
+  static char req[16384];
+  StrBuf b = {req, 0, sizeof req - 1};
+  const char *sys = "Extract calendar events. Reply with a single JSON object only: "
+                    "{\"is_event\":bool,\"title\":str,\"starts_at\":str,\"deadline\":str,"
+                    "\"location\":str,\"kind\":\"appointment|obligation|none\",\"confidence\":0-1}. "
+                    "Use empty string when unknown. Favor recall for appointments and obligations.";
+  b.len += (size_t)snprintf(b.p, b.cap, "{\"model\":\"%s\",\"temperature\":0,\"messages\":["
+                                        "{\"role\":\"system\",\"content\":\"%s\"},"
+                                        "{\"role\":\"user\",\"content\":\"",
+                           model, sys);
+  char user[9216];
+  snprintf(user, sizeof user, "from: %s\napp: %s\nsubject: %s\nbody: %s", in->from, in->app,
+           in->title, in->text);
+  // escape user text into remaining space
+  {
+    StrBuf e = {b.p, b.len, b.cap};
+    json_escape(user, &e);
+    b.len = e.len;
+  }
+  b.len += (size_t)snprintf(b.p + b.len, b.cap - b.len, "\"}]}");
+  b.p[b.len] = 0;
+
+  CURL *ch = curl_easy_init();
+  if (!ch) return -1;
+  StrBuf resp = {0};
+  struct curl_slist *hdrs = NULL;
+  hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+  char auth[512] = "";
+  if (key && *key) {
+    snprintf(auth, sizeof auth, "Authorization: Bearer %s", key);
+    hdrs = curl_slist_append(hdrs, auth);
+  }
+  curl_easy_setopt(ch, CURLOPT_URL, url);
+  curl_easy_setopt(ch, CURLOPT_HTTPHEADER, hdrs);
+  curl_easy_setopt(ch, CURLOPT_POSTFIELDS, b.p);
+  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, llm_sink);
+  curl_easy_setopt(ch, CURLOPT_WRITEDATA, &resp);
+  curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+  curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 15000L);
+  CURLcode rc = curl_easy_perform(ch);
+  long http = 0;
+  curl_easy_getinfo(ch, CURLINFO_RESPONSE_CODE, &http);
+  curl_slist_free_all(hdrs);
+  curl_easy_cleanup(ch);
+  if (rc != CURLE_OK || http < 200 || http >= 300 || !resp.p) {
+    logf("llmCall failed: %s http=%ld", curl_easy_strerror(rc), http);
+    free(resp.p);
+    return -1;
+  }
+  // content field (chat completions) or raw object
+  char content[8192] = "";
+  int ok = 0;
+  if (!json_string(resp.p, "content", content, sizeof content) && content[0]) {
+    ok = 1;
+  } else {
+    snprintf(content, sizeof content, "%s", resp.p); // already a bare object?
+    ok = strchr(content, '{') != NULL;
+  }
+  free(resp.p);
+  if (!ok) return -1;
+  char *obj = strchr(content, '{');
+  char *end = strrchr(obj, '}');
+  if (!obj || !end || end <= obj) return -1;
+  end[1] = 0;
+
+  memset(c, 0, sizeof *c);
+  char isev[16] = "";
+  double conf = -1;
+  json_string(obj, "is_event", isev, sizeof isev);
+  if (!strcmp(isev, "false")) {
+    snprintf(c->kind, sizeof c->kind, "none");
+    return 0;
+  }
+  json_string(obj, "title", c->title, sizeof c->title);
+  json_string(obj, "starts_at", c->starts_at, sizeof c->starts_at);
+  json_string(obj, "deadline", c->deadline, sizeof c->deadline);
+  json_string(obj, "location", c->location, sizeof c->location);
+  json_string(obj, "kind", c->kind, sizeof c->kind);
+  if (strcmp(c->kind, "appointment") && strcmp(c->kind, "obligation")) {
+    if (!json_number(obj, "confidence", &conf) && conf < 0.3) {
+      snprintf(c->kind, sizeof c->kind, "none");
+      return 0;
+    }
+    snprintf(c->kind, sizeof c->kind, "none");
+    return 0;
+  }
+  if (json_number(obj, "confidence", &conf)) conf = 0.6;
+  c->confidence = conf < 0 ? 0 : conf > 1 ? 1 : conf;
+  if (!c->title[0]) snprintf(c->title, sizeof c->title, "%s", in->title);
+  return 0;
+}
+
+static int classify_input(const Input *in, Classified *c) {
+  if (!classify_llm(in, c)) return 0; // configured and usable
+  if (getenv("LLM_API_URL") && *getenv("LLM_API_URL")) logf("llmCall failed, heuristic fallback");
+  classify_heuristic(in, c);
+  return 0;
+}
+
+static int store_event(long long raw_id, const Classified *c) {
+  char now[32];
+  utc_now(now, sizeof now);
+  sqlite3_stmt *st = NULL;
+  const char *sql = "INSERT INTO events"
+                    "(raw_id,title,starts_at,deadline,location,kind,confidence,created_at)"
+                    " VALUES(?,?,?,?,?,?,?,?);";
+  if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
+  sqlite3_bind_int64(st, 1, raw_id);
+  sqlite3_bind_text(st, 2, c->title, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 3, c->starts_at, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 4, c->deadline, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 5, c->location, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 6, c->kind, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_double(st, 7, c->confidence);
+  sqlite3_bind_text(st, 8, now, -1, SQLITE_TRANSIENT);
+  int rc = sqlite3_step(st);
+  sqlite3_finalize(st);
+  return rc == SQLITE_DONE ? 0 : -1;
+}
+
 // ---- http ---------------------------------------------------------------
 
 #define HDR_CAP 8192
@@ -732,12 +1019,21 @@ static void handle_conn(int fd) {
         if (id < 0) {
           reply(fd, 500, "text/plain", "db error", 8);
         } else {
-          MPW w = {0};
-          mp_map(&w, 1);
-          mp_str(&w, "raw_id");
-          mp_u64(&w, (unsigned long long)id);
-          reply(fd, 200, "application/msgpack", w.p, (long)w.len);
-          free(w.p);
+          Classified c;
+          classify_input(&in, &c);
+          int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
+          if (is_event && store_event(id, &c)) {
+            reply(fd, 500, "text/plain", "db error", 8);
+          } else {
+            MPW w = {0};
+            mp_map(&w, 2);
+            mp_str(&w, "raw_id");
+            mp_u64(&w, (unsigned long long)id);
+            mp_str(&w, "is_event");
+            mp_u64(&w, is_event ? 1 : 0);
+            reply(fd, 200, "application/msgpack", w.p, (long)w.len);
+            free(w.p);
+          }
         }
       }
     }
