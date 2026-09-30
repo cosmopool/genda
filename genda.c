@@ -504,6 +504,90 @@ static long long store_raw(const Input *in) {
   return id;
 }
 
+// Percent-decode src into dst (dst size cap). Returns 0 ok.
+static void url_decode(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  for (; *src && o + 1 < cap; src++) {
+    if (*src == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
+      char hex[3] = {src[1], src[2], 0};
+      dst[o++] = (char)strtol(hex, NULL, 16);
+      src += 2;
+    } else if (*src == '+') {
+      dst[o++] = ' ';
+    } else {
+      dst[o++] = *src;
+    }
+  }
+  dst[o] = 0;
+}
+
+static void query_val(const char *q, const char *key, char *out, size_t cap) {
+  out[0] = 0;
+  size_t klen = strlen(key);
+  for (const char *p = q; *p;) {
+    if (!strncmp(p, key, klen) && p[klen] == '=') {
+      const char *v = p + klen + 1;
+      const char *e = strchr(v, '&');
+      size_t n = e ? (size_t)(e - v) : strlen(v);
+      char tmp[1024];
+      if (n >= sizeof tmp) n = sizeof tmp - 1;
+      memcpy(tmp, v, n);
+      tmp[n] = 0;
+      url_decode(tmp, out, cap);
+      return;
+    }
+    p = strchr(p, '&');
+    if (!p) return;
+    p++;
+  }
+}
+
+// Pack all events in range as msgpack array. since/until "" = unbounded.
+static int pack_events(const char *since, const char *until, MPW *w) {
+  sqlite3_stmt *st = NULL;
+  const char *sql = "SELECT id,raw_id,title,starts_at,deadline,location,kind,confidence,created_at"
+                    " FROM events WHERE (?1='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)>=?1)"
+                    " AND (?2='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)<=?2)"
+                    " ORDER BY created_at,id;";
+  if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
+  sqlite3_bind_text(st, 1, since, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, until, -1, SQLITE_TRANSIENT);
+  MPW items = {0};
+  unsigned long count = 0;
+  const char *keys[7] = {"title", "starts_at", "deadline", "location", "kind", "", "created_at"};
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const char *cols[7] = {(const char *)sqlite3_column_text(st, 2),
+                           (const char *)sqlite3_column_text(st, 3),
+                           (const char *)sqlite3_column_text(st, 4),
+                           (const char *)sqlite3_column_text(st, 5),
+                           (const char *)sqlite3_column_text(st, 6),
+                           NULL,
+                           (const char *)sqlite3_column_text(st, 8)};
+    mp_map(&items, 9);
+    mp_str(&items, "id");
+    mp_u64(&items, (unsigned long long)sqlite3_column_int64(st, 0));
+    mp_str(&items, "raw_id");
+    mp_u64(&items, (unsigned long long)sqlite3_column_int64(st, 1));
+    for (int i = 0; i < 7; i++) {
+      if (i == 5) continue;
+      mp_str(&items, keys[i]);
+      mp_str(&items, cols[i] ? cols[i] : "");
+    }
+    mp_str(&items, "confidence");
+    mp_f64(&items, sqlite3_column_double(st, 7));
+    count++;
+  }
+  sqlite3_finalize(st);
+  mp_arr(w, count);
+  if (count) {
+    mp_reserve(w, items.len);
+    memcpy(w->p + w->len, items.p, items.len);
+    w->len += items.len;
+  }
+  free(items.p);
+  return 0;
+}
+
 // ---- http ---------------------------------------------------------------
 
 #define HDR_CAP 8192
@@ -619,6 +703,21 @@ static void handle_conn(int fd) {
 
   if (!strcmp(r.method, "GET") && !strcmp(r.path, "/health")) {
     reply(fd, 200, "text/plain", "ok", 2);
+  } else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/events")) {
+    if (!authed(&r)) {
+      reply(fd, 401, "text/plain", "unauthorized", 12);
+    } else {
+      char since[64] = "", until[64] = "";
+      query_val(r.query, "since", since, sizeof since);
+      query_val(r.query, "until", until, sizeof until);
+      MPW w = {0};
+      if (pack_events(since, until, &w)) {
+        reply(fd, 500, "text/plain", "db error", 8);
+      } else {
+        reply(fd, 200, "application/msgpack", w.p, (long)w.len);
+      }
+      free(w.p);
+    }
   } else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/ingest")) {
     if (!authed(&r)) {
       reply(fd, 401, "text/plain", "unauthorized", 12);
