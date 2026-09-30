@@ -1,0 +1,6 @@
+genda
+test_integration
+*.o
+*.db
+*.db-journal
+.DS_Store
