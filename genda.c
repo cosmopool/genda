@@ -832,7 +832,20 @@ static void handle_conn(int fd) {
           Classified c;
           classify_input(&in, &c);
           int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
-          if (is_event && store_event(id, &c)) {
+          int rc = 0;
+          if (is_event) {
+            // idempotent: re-ingest of the same raw never duplicates the event
+            sqlite3_stmt *q = NULL;
+            int have = 0;
+            if (!sqlite3_prepare_v2(g_db, "SELECT 1 FROM events WHERE raw_id=?;", -1, &q,
+                                    NULL)) {
+              sqlite3_bind_int64(q, 1, id);
+              have = sqlite3_step(q) == SQLITE_ROW;
+              sqlite3_finalize(q);
+            }
+            if (!have) rc = store_event(id, &c);
+          }
+          if (rc) {
             reply(fd, 500, "text/plain", "db error", 8);
           } else {
             MPW w = {0};
