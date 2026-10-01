@@ -120,6 +120,7 @@ typedef struct {
 
 // ---------- Slices
 
+__attribute__((format(printf, 2, 3)))
 static inline void mclExitMsg(u32 exit_code, const char *fmt, ...) {
     va_list args;
 
@@ -127,7 +128,7 @@ static inline void mclExitMsg(u32 exit_code, const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     va_end(args);
 
-    exit(exit_code);
+    exit((int)exit_code);
 }
 
 // ---------- Utils
