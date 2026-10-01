@@ -69,6 +69,26 @@ TEST longStringUsesStr8(void) {
   PASS();
 }
 
+// Every str8 length must decode exactly (length byte read as unsigned).
+TEST str8AllLengthsRoundTrip(void) {
+  char big[256];
+  for (int n = 32; n < 256; n++) {
+    memset(big, 'y', (size_t)n);
+    big[n] = 0;
+    MpWriter w = {0};
+    mpStr(&w, big);
+    ASSERT_EQ(0xd9, w.p[0]);
+    MpReader r = {w.p, w.p + w.len};
+    char *v = mpStrval(&r);
+    ASSERT(v != NULL);
+    ASSERT_STR_EQ(big, v);
+    ASSERT(r.p == r.end);
+    free(v);
+    free(w.p);
+  }
+  PASS();
+}
+
 TEST skipNestedValues(void) {
   MpWriter w = {0};
   mpMap(&w, 2);
@@ -126,6 +146,7 @@ int main(int argc, char **argv) {
   GREATEST_MAIN_BEGIN();
   RUN_TEST(roundTripScalars);
   RUN_TEST(longStringUsesStr8);
+  RUN_TEST(str8AllLengthsRoundTrip);
   RUN_TEST(skipNestedValues);
   RUN_TEST(truncatedInputFails);
   GREATEST_MAIN_END();

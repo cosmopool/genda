@@ -228,10 +228,13 @@ char *mpStrval(MpReader *r) {
   if ((b & 0xe0) == 0xa0 || b == 0xd9) {
     MpReader t = *r;
     t.p++;
-    if ((b & 0xe0) == 0xa0)
+    if ((b & 0xe0) == 0xa0) {
       n = b & 0x1f;
-    else if (mpByte(&t, (unsigned char *)&n))
-      return NULL;
+    } else {
+      unsigned char m;
+      if (mpByte(&t, &m)) return NULL;
+      n = m;
+    }
     if (t.end - t.p < n) return NULL;
     char *s = malloc((size_t)n + 1);
     if (!s) return NULL;
