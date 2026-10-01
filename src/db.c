@@ -159,6 +159,10 @@ Ingest dbIngest(const Input *in) {
     return out;
   }
   Classified c = classifyInput(in);
+  if (!c.ok) { // raw kept; the caller fails, so the input is retried
+    configLog("classify failed raw=%" PRId64, id.v);
+    return out;
+  }
   if (c.is_event && dbStoreEvent(id, &c)) {
     configLog("store event: %s", sqlite3_errmsg(g_db));
     return out;

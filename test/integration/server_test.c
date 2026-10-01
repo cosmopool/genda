@@ -1,5 +1,6 @@
 // Integration tests: real genda binary + temp sqlite, exercised over HTTP.
-// Asserts on wire behavior (msgpack): events only via GET /events.
+// Asserts on wire behavior (msgpack): events only via GET /events. genda
+// classifies against the fake Zen server (zen_fake.h) in this process.
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <netinet/in.h>
@@ -15,6 +16,7 @@
 
 #include "../../src/core.h"
 #include "../vendor/greatest.h"
+#include "zen_fake.h"
 
 #define TOKEN "t-secret"
 
@@ -310,8 +312,9 @@ static i64 testEventsTitled(const char *title) {
 
 // ---- db peek (resulting state) -------------------------------------------
 
-// raw_inputs has no API; its schema is a contract (AGENTS.md), so peek it.
-static i64 testDbCount(const char *sql) {
+// One integer from a query; -1 if no row. raw_inputs has no API; its schema
+// is a contract (AGENTS.md), so peek it.
+static i64 testDbI64(const char *sql) {
   sqlite3 *db = NULL;
   if (sqlite3_open(g_db_path, &db)) return -1;
   sqlite3_stmt *st = NULL;
@@ -393,7 +396,7 @@ TEST emailBecomesObligation(void) {
 }
 
 TEST noiseIsKeptRawButNotAnEvent(void) {
-  i64 raws_before = testDbCount("SELECT COUNT(*) FROM raw_inputs;");
+  i64 raws_before = testDbI64("SELECT COUNT(*) FROM raw_inputs;");
   Buf b = {0};
   const char *k[] = {"title", "text", "ext_id"};
   const char *v[] = {"meme of the day", "haha look at this", "t-none-1"};
@@ -408,7 +411,7 @@ TEST noiseIsKeptRawButNotAnEvent(void) {
   testNfree(m);
   testRespFree(&r);
   free(b.p);
-  ASSERT_EQ(raws_before + 1, testDbCount("SELECT COUNT(*) FROM raw_inputs;"));
+  ASSERT_EQ(raws_before + 1, testDbI64("SELECT COUNT(*) FROM raw_inputs;"));
   ASSERT_EQ(0, testEventsTitled("meme of the day"));
   PASS();
 }
@@ -432,8 +435,38 @@ TEST duplicateExtIdStoresOnce(void) {
   testRespFree(&r1);
   testRespFree(&r2);
   free(b.p);
-  ASSERT_EQ(1, testDbCount("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
+  ASSERT_EQ(1, testDbI64("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
   ASSERT_EQ(1, testEventsTitled("Flight 2026-11-02T07:30"));
+  PASS();
+}
+
+// Jev down: the raw is kept but /ingest fails, so the client retries; the
+// retry answers with the raw_id stored by the failed attempt.
+TEST jevFailureIs500ThenRetry(void) {
+  Buf b = {0};
+  const char *k[] = {"source", "title", "text", "ext_id"};
+  const char *v[] = {"notif", "Meeting retry 2026-12-03T09:00", "room 4", "t-retry-1"};
+  testPkInput(&b, k, v, 4);
+  zenFakeMode(ZEN_FAKE_FAIL_500);
+  Resp r;
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r));
+  ASSERT_EQ(500, r.status);
+  testRespFree(&r);
+  i64 kept = testDbI64("SELECT id FROM raw_inputs WHERE ext_id='t-retry-1';");
+  ASSERT(kept > 0);
+  ASSERT_EQ(0, testEventsTitled("Meeting retry 2026-12-03T09:00"));
+  zenFakeMode(ZEN_FAKE_OK);
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r));
+  free(b.p);
+  ASSERT_EQ(200, r.status);
+  Cur c = {r.body, r.body + r.len};
+  Node *m = testParse(&c);
+  Node *raw = testMget(m, "raw_id");
+  ASSERT(raw && raw->t == N_UINT);
+  ASSERT_EQ((u64)kept, raw->u);
+  testNfree(m);
+  testRespFree(&r);
+  ASSERT_EQ(1, testEventsTitled("Meeting retry 2026-12-03T09:00"));
   PASS();
 }
 
@@ -456,6 +489,11 @@ TEST malformedRequestIs400(void) {
 // ---- runner ---------------------------------------------------------------
 
 GREATEST_MAIN_DEFS();
+
+static void testSetup(void *arg) {
+  (void)arg;
+  zenFakeMode(ZEN_FAKE_OK);
+}
 
 static int testWaitHealthy(void) {
   for (i32 i = 0; i < 50; i++) {
@@ -495,6 +533,12 @@ int main(int argc, char **argv) {
   }
   close(tfd);
   snprintf(g_db_path, sizeof g_db_path, "%s", tmpl);
+  // before fork: the child inherits GENDA_ZEN_URL and OPENCODE_API_KEY
+  if (zenFakeStart()) {
+    fprintf(stderr, "zen fake failed\n");
+    unlink(g_db_path);
+    return 1;
+  }
 
   g_child = fork();
   if (g_child == 0) {
@@ -514,11 +558,13 @@ int main(int argc, char **argv) {
   if (!alive) g_child = -1; // reaped or never forked: never signal a recycled pid
   int came_up = healthy && alive;
   if (came_up) {
+    SET_SETUP(testSetup, NULL);
     RUN_TEST(authIsEnforced);
     RUN_TEST(notificationBecomesAppointment);
     RUN_TEST(emailBecomesObligation);
     RUN_TEST(noiseIsKeptRawButNotAnEvent);
     RUN_TEST(duplicateExtIdStoresOnce);
+    RUN_TEST(jevFailureIs500ThenRetry);
     RUN_TEST(malformedRequestIs400);
   } else if (healthy) {
     fprintf(stderr, "genda exited, yet port %d answered /health: port taken?\n", test_port);

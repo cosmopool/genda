@@ -24,12 +24,14 @@ typedef struct {
   char source[32], app[128], title[512], text[4096], from[256], time[64], ext_id[128];
 } Input;
 
-// Classification result. Mock = keyword heuristic (see classify.c TODO).
+// Classification result. {0} (ok == 0) = not classified: Jev failed, retry
+// the input later.
 typedef struct {
   char title[512], starts_at[64], deadline[64], location[256];
   EventKind kind;
   f64 confidence;
   int is_event; // confident enough to become an events row
+  int ok;       // 1 = Jev answered and every field parsed
 } Classified;
 
 #endif

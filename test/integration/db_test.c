@@ -1,11 +1,15 @@
-// db module tests: ingest dedupe, event feed, range filter, meta — through
-// db.h against a temp sqlite file. No server, no network.
+// db module tests: ingest dedupe, event feed, range filter, meta, retry
+// after a Jev failure — through db.h against a temp sqlite file, classifying
+// via the fake Zen server (zen_fake.h). No real network.
+#include "../../src/classify.h"
 #include "../../src/common.h"
 #include "../../src/config.h"
 #include "../../src/db.h"
 #include "../../src/msgpack.h"
 #include "../vendor/greatest.h"
+#include "zen_fake.h"
 
+#include <curl/curl.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,7 +61,23 @@ static i64 testFeedCount(const char *since, const char *until, const char *title
   return bad ? -1 : count;
 }
 
-// Titles without event keywords keep these raw-only: no events rows.
+// One integer from a query on the open db; -1 if no row. raw_inputs has no
+// read API, and its schema is a contract (AGENTS.md), so peek it.
+static i64 testDbI64(const char *sql) {
+  sqlite3_stmt *st = NULL;
+  i64 v = -1;
+  if (!sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) && sqlite3_step(st) == SQLITE_ROW)
+    v = sqlite3_column_int64(st, 0);
+  sqlite3_finalize(st);
+  return v;
+}
+
+static void testSetup(void *arg) {
+  (void)arg;
+  zenFakeMode(ZEN_FAKE_OK);
+}
+
+// The fake Jev answers none for these: raw-only, no events rows.
 TEST storesAndDedupesRaw(void) {
   Input in;
   ASSERT_EQ(0, testFillInput(&in, "db-raw-1", "Note to self", "confirming"));
@@ -115,6 +135,24 @@ TEST ingestTwiceStoresOneEvent(void) {
   PASS();
 }
 
+TEST jevFailureKeepsRawAndRetries(void) {
+  Input in;
+  ASSERT_EQ(0, testFillInput(&in, "db-retry-1", "Dentist retry 2026-12-01T10:00", "confirming"));
+  zenFakeMode(ZEN_FAKE_FAIL_500);
+  ASSERT_EQ(0, dbIngest(&in).id.v);
+  i64 kept = testDbI64("SELECT id FROM raw_inputs WHERE ext_id='db-retry-1';");
+  ASSERT(kept > 0); // raw stored before classifying
+  ASSERT_EQ(0, testFeedCount("", "", "Dentist retry 2026-12-01T10:00"));
+  zenFakeMode(ZEN_FAKE_OK);
+  Ingest retry = dbIngest(&in);
+  ASSERT_EQ(kept, retry.id.v);
+  ASSERT(retry.is_event);
+  ASSERT_EQ(kept, dbIngest(&in).id.v);
+  ASSERT_EQ(1, testFeedCount("", "", "Dentist retry 2026-12-01T10:00"));
+  ASSERT_EQ(1, testDbI64("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='db-retry-1';"));
+  PASS();
+}
+
 TEST metaRoundTrip(void) {
   dbMetaUidSet((ImapUid){42});
   ASSERT_EQ(42, dbMetaUid().v);
@@ -127,6 +165,11 @@ GREATEST_MAIN_DEFS();
 
 int main(int argc, char **argv) {
   GREATEST_MAIN_BEGIN();
+  curl_global_init(CURL_GLOBAL_ALL);
+  if (zenFakeStart() || classifyInit()) {
+    fprintf(stderr, "classify setup failed\n");
+    return 1;
+  }
   char tmpl[] = "/tmp/genda-db-XXXXXX.db";
   int tfd = mkstemps(tmpl, 3);
   if (tfd < 0) {
@@ -142,10 +185,12 @@ int main(int argc, char **argv) {
     return 1;
   }
   snprintf(tmp_db_path, sizeof tmp_db_path, "%s", tmpl);
+  SET_SETUP(testSetup, NULL);
   RUN_TEST(storesAndDedupesRaw);
   RUN_TEST(derivesMissingExtId);
   RUN_TEST(storesAndFiltersEvents);
   RUN_TEST(ingestTwiceStoresOneEvent);
+  RUN_TEST(jevFailureKeepsRawAndRetries);
   RUN_TEST(metaRoundTrip);
   sqlite3_close(g_db);
   unlink(tmp_db_path);

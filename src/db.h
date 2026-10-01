@@ -12,12 +12,13 @@ void dbUtcNow(char *out, usize n);
 int dbParseInput(const u8 *body, i64 len, Input *in);
 
 typedef struct {
-  RawId id; // {0} on db error (logged)
+  RawId id; // {0} on db or classify error (logged)
   int is_event;
 } Ingest;
 
 // The one ingest path (/ingest and IMAP): store raw input (dedupe by ext_id),
-// classify, store its event once per raw_id.
+// classify, store its event once per raw_id. id is {0} when the db or the
+// classifier fails (raw already stored): retrying the same input is safe.
 Ingest dbIngest(const Input *in);
 // Pack all events in range as msgpack array. since/until "" = unbounded.
 int dbPackEvents(const char *since, const char *until, MpWriter *w);
