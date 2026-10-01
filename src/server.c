@@ -2,7 +2,6 @@
 // TLS terminates outside (Caddy/Tailscale).
 #include "server.h"
 
-#include "classify.h"
 #include "common.h"
 #include "config.h"
 #include "db.h"
@@ -76,16 +75,17 @@ static int serverAuthed(const Request *r) {
   return strcmp(r->auth, want) == 0;
 }
 
-// Read until "\r\n\r\n" or HDR_CAP. Returns header bytes, or -1 on error.
+// Read until "\r\n\r\n" or HDR_CAP. Returns header bytes, 0 on error (no
+// terminator in an empty block, so the caller's check covers it).
 static long serverReadHeaders(int fd, unsigned char *hdr) {
   long got = 0;
   while (got < HDR_CAP) {
     ssize_t n = recv(fd, hdr + got, (size_t)(HDR_CAP - got), 0);
-    if (n <= 0) return -1;
+    if (n <= 0) return 0;
     got += n;
     if (got >= 4 && memmem(hdr, (size_t)got, "\r\n\r\n", 4)) return got;
   }
-  return -1;
+  return 0;
 }
 
 // Percent-decode src into dst (dst size cap).
@@ -130,7 +130,7 @@ static void serverQueryVal(const char *q, const char *key, char *out, size_t cap
 // *r. Returns 0 ok, -1 on a malformed request line or a Content-Length that
 // is not a plain non-negative number.
 static int serverParseRequest(char *hdr, Request *r) {
-  memset(r, 0, sizeof *r);
+  *r = (Request){0};
   char *save = NULL;
   char *line = strtok_r(hdr, "\r\n", &save);
   if (!line) return -1;
@@ -181,9 +181,9 @@ static int serverParseRequest(char *hdr, Request *r) {
 }
 
 static void serverHandleConn(int fd) {
-  static unsigned char hdr[HDR_CAP + 1];
+  static unsigned char hdr[HDR_CAP + 1]; // single-threaded server
+  static unsigned char body[BODY_CAP];
   long hlen = serverReadHeaders(fd, hdr);
-  if (hlen < 0) return;
   hdr[hlen] = 0;
 
   // bound parsing to header region so strtok_r never touches body
@@ -202,20 +202,13 @@ static void serverHandleConn(int fd) {
     serverReply(fd, 400, "text/plain", "body too large", 14);
     return;
   }
-  unsigned char *body = NULL;
-  if (r.content_length > 0) {
-    body = malloc((size_t)r.content_length);
-    if (!body) return;
-    long have = buffered > r.content_length ? r.content_length : buffered;
-    memcpy(body, hdr + used, (size_t)have);
-    while (have < r.content_length) {
-      ssize_t n = recv(fd, body + have, (size_t)(r.content_length - have), 0);
-      if (n <= 0) {
-        free(body);
-        return;
-      }
-      have += n;
-    }
+  // content_length is in [0, BODY_CAP] here
+  long have = buffered > r.content_length ? r.content_length : buffered;
+  memcpy(body, hdr + used, (size_t)have);
+  while (have < r.content_length) {
+    ssize_t n = recv(fd, body + have, (size_t)(r.content_length - have), 0);
+    if (n <= 0) return;
+    have += n;
   }
 
   if (r.method == M_GET && !strcmp(r.path, "/health")) {
@@ -242,37 +235,27 @@ static void serverHandleConn(int fd) {
       serverReply(fd, 400, "text/plain", "want application/msgpack", 25);
     } else {
       Input in;
-      if (!body || dbParseInput(body, r.content_length, &in)) {
+      if (dbParseInput(body, r.content_length, &in)) {
         serverReply(fd, 400, "text/plain", "bad msgpack map", 14);
       } else {
-        RawId id = dbStoreRaw(&in);
-        if (id.v == 0) {
+        Ingest ing = dbIngest(&in);
+        if (ing.id.v == 0) {
           serverReply(fd, 500, "text/plain", "db error", 8);
         } else {
-          Classified c;
-          classifyInput(&in, &c);
-          int is_event = c.confidence >= 0.3 && c.kind != KIND_NONE;
-          int rc = 0;
-          if (is_event) rc = dbStoreEvent(id, &c);
-          if (rc) {
-            serverReply(fd, 500, "text/plain", "db error", 8);
-          } else {
-            MpWriter w = {0};
-            mpMap(&w, 2);
-            mpStr(&w, "raw_id");
-            mpU64(&w, (unsigned long long)id.v);
-            mpStr(&w, "is_event");
-            mpU64(&w, is_event ? 1 : 0);
-            serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
-            free(w.p);
-          }
+          MpWriter w = {0};
+          mpMap(&w, 2);
+          mpStr(&w, "raw_id");
+          mpU64(&w, (unsigned long long)ing.id.v);
+          mpStr(&w, "is_event");
+          mpU64(&w, ing.is_event ? 1 : 0);
+          serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
+          free(w.p);
         }
       }
     }
   } else {
     serverReply(fd, 404, "text/plain", "not found", 9);
   }
-  free(body);
 }
 
 int serverRun(void) {
@@ -283,8 +266,7 @@ int serverRun(void) {
   }
   int one = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof addr);
+  struct sockaddr_in addr = {0};
   addr.sin_family = AF_INET;
   addr.sin_port = htons((uint16_t)g_port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);

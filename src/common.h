@@ -27,6 +27,7 @@ typedef struct {
   char title[512], starts_at[64], deadline[64], location[256];
   EventKind kind;
   double confidence;
+  int is_event; // confident enough to become an events row
 } Classified;
 
 #endif

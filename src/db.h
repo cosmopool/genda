@@ -10,10 +10,15 @@ void dbUtcNow(char *out, size_t n);
 // Parse msgpack map body into Input. Unknown keys skipped. Missing ext_id is
 // derived by hash of source/title/text, missing time is now. Returns 0 ok.
 int dbParseInput(const unsigned char *body, long len, Input *in);
-// Store raw input, dedupe by ext_id. Returns raw_id, {0} on error.
-RawId dbStoreRaw(const Input *in);
-// Idempotent: a raw_id that already has an event is left alone. Returns 0 ok.
-int dbStoreEvent(RawId raw_id, const Classified *c);
+
+typedef struct {
+  RawId id; // {0} on db error (logged)
+  int is_event;
+} Ingest;
+
+// The one ingest path (/ingest and IMAP): store raw input (dedupe by ext_id),
+// classify, store its event once per raw_id.
+Ingest dbIngest(const Input *in);
 // Pack all events in range as msgpack array. since/until "" = unbounded.
 int dbPackEvents(const char *since, const char *until, MpWriter *w);
 ImapUid dbMetaUid(void);

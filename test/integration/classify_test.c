@@ -15,10 +15,9 @@ static void fillInput(Input *in, const char *title, const char *text) {
 TEST appointmentKeywordWithDate(void) {
   Input in;
   fillInput(&in, "Team meeting", "see you 2026-10-01T10:00");
-  Classified c;
-  ASSERT_EQ(0, classifyInput(&in, &c));
+  Classified c = classifyInput(&in);
   ASSERT_EQ(KIND_APPOINTMENT, c.kind);
-  ASSERT(c.confidence >= 0.3);
+  ASSERT(c.is_event);
   ASSERT_STR_EQ("2026-10-01T10:00:00Z", c.starts_at);
   PASS();
 }
@@ -26,10 +25,9 @@ TEST appointmentKeywordWithDate(void) {
 TEST obligationKeywordWithDeadline(void) {
   Input in;
   fillInput(&in, "Invoice due", "please pay by 2026-10-05");
-  Classified c;
-  ASSERT_EQ(0, classifyInput(&in, &c));
+  Classified c = classifyInput(&in);
   ASSERT_EQ(KIND_OBLIGATION, c.kind);
-  ASSERT(c.confidence >= 0.3);
+  ASSERT(c.is_event);
   ASSERT_STR_EQ("2026-10-05T00:00:00Z", c.deadline);
   ASSERT(c.starts_at[0] == 0);
   PASS();
@@ -38,18 +36,16 @@ TEST obligationKeywordWithDeadline(void) {
 TEST noiseIsNone(void) {
   Input in;
   fillInput(&in, "meme of the day", "haha look at this");
-  Classified c;
-  ASSERT_EQ(0, classifyInput(&in, &c));
+  Classified c = classifyInput(&in);
   ASSERT_EQ(KIND_NONE, c.kind);
-  ASSERT(c.confidence < 0.3);
+  ASSERT(!c.is_event);
   PASS();
 }
 
 TEST emptyTitleFallsBackToText(void) {
   Input in;
   fillInput(&in, "", "dentist visit tomorrow");
-  Classified c;
-  ASSERT_EQ(0, classifyInput(&in, &c));
+  Classified c = classifyInput(&in);
   ASSERT_EQ(KIND_APPOINTMENT, c.kind);
   ASSERT_STR_EQ("dentist visit tomorrow", c.title);
   PASS();

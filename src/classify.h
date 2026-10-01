@@ -5,7 +5,7 @@
 #include "common.h"
 
 // TODO: real classifier (LLM) lands here. Mock = keyword heuristic only.
-// Stores nothing; returns 0 always (result is in *c).
-int classifyInput(const Input *in, Classified *c);
+// Stores nothing.
+Classified classifyInput(const Input *in);
 
 #endif

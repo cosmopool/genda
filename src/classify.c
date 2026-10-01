@@ -1,6 +1,6 @@
 // Input classification into calendar events.
-// One crux: LLM when configured, keyword heuristic otherwise (or on failure).
-// Stores nothing itself; returns 1 when an event row should be written.
+// Keyword heuristic for now (TODO: LLM). Stores nothing; sets is_event when
+// an events row should be written.
 #include "classify.h"
 
 #include "common.h"
@@ -41,8 +41,8 @@ static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
   return 0;
 }
 
+// c arrives zeroed.
 static void classifyHeuristic(const Input *in, Classified *c) {
-  memset(c, 0, sizeof *c);
   snprintf(c->title, sizeof c->title, "%s", in->title[0] ? in->title : in->text);
   char hay[4608];
   char tmp[4608];
@@ -74,7 +74,9 @@ static void classifyHeuristic(const Input *in, Classified *c) {
 }
 
 // TODO: real classifier (LLM) lands here. Mock = keyword heuristic only.
-int classifyInput(const Input *in, Classified *c) {
-  classifyHeuristic(in, c);
-  return 0;
+Classified classifyInput(const Input *in) {
+  Classified c = {0};
+  classifyHeuristic(in, &c);
+  c.is_event = c.confidence >= 0.3 && c.kind != KIND_NONE;
+  return c;
 }

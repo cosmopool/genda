@@ -2,7 +2,6 @@
 // No-op unless GENDA_IMAP_URL is set. Never marks mail read.
 #include "imap.h"
 
-#include "classify.h"
 #include "common.h"
 #include "config.h"
 #include "db.h"
@@ -14,6 +13,7 @@
 #include <strings.h>
 #include <unistd.h>
 
+// Response text, NUL-terminated. Allocated once in imapThread, never NULL.
 typedef struct {
   char *p;
   size_t len, cap;
@@ -23,7 +23,7 @@ static size_t imapCurlSink(void *ptr, size_t size, size_t n, void *ud) {
   CurlBuf *b = ud;
   size_t want = size * n;
   if (b->len + want + 1 > b->cap) {
-    size_t ncap = b->cap ? b->cap * 2 : 4096;
+    size_t ncap = b->cap * 2;
     while (ncap < b->len + want + 1) ncap *= 2;
     if (ncap > 262144) return 0;
     char *np = realloc(b->p, ncap);
@@ -37,22 +37,19 @@ static size_t imapCurlSink(void *ptr, size_t size, size_t n, void *ud) {
   return want;
 }
 
-// One IMAP command; captures the untagged response text. Returns 0 ok.
-static int imapCmd(const char *url, const char *user, const char *pass, const char *cmd,
-                    CurlBuf *out) {
-  CURL *ch = curl_easy_init();
-  if (!ch) return -1;
-  curl_easy_setopt(ch, CURLOPT_URL, url);
-  curl_easy_setopt(ch, CURLOPT_USERNAME, user);
-  curl_easy_setopt(ch, CURLOPT_PASSWORD, pass);
+// One IMAP command on the shared handle (connection reused); out is reset
+// and captures the untagged response text. Returns 0 ok, logs failures.
+static int imapCmd(CURL *ch, const char *cmd, CurlBuf *out) {
+  out->len = 0;
+  out->p[0] = 0;
   curl_easy_setopt(ch, CURLOPT_CUSTOMREQUEST, cmd);
-  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, imapCurlSink);
   curl_easy_setopt(ch, CURLOPT_WRITEDATA, out);
-  curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
-  curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 60000L);
   CURLcode rc = curl_easy_perform(ch);
-  curl_easy_cleanup(ch);
-  return rc == CURLE_OK ? 0 : -1;
+  if (rc != CURLE_OK) {
+    configLog("imap %s: %s", cmd, curl_easy_strerror(rc));
+    return -1;
+  }
+  return 0;
 }
 
 // Unfold + extract a header field value into out.
@@ -96,75 +93,63 @@ static Input imapParseInput(const char *hdrs, const char *text, ImapUid uid) {
   return in;
 }
 
-static void imapPollOnce(const char *url, const char *user, const char *pass) {
-  CurlBuf s = {0};
-  if (imapCmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
-    configLog("imap search failed");
-    free(s.p);
-    return;
-  }
-  if (!s.p) return; // empty response; glibc strtok_r derefs a NULL save
+static void imapPollOnce(CURL *ch, CurlBuf *s, CurlBuf *h, CurlBuf *t) {
+  if (imapCmd(ch, "UID SEARCH UNSEEN", s)) return;
   ImapUid last = dbMetaUid(), max = last;
   // response holds "* SEARCH 12 13 ..." possibly across lines, uids ascending.
   // Stop at the first failure so the next poll retries from that uid.
   char *save = NULL;
-  for (char *tok = strtok_r(s.p, " \r\n", &save); tok; tok = strtok_r(NULL, " \r\n", &save)) {
+  for (char *tok = strtok_r(s->p, " \r\n", &save); tok; tok = strtok_r(NULL, " \r\n", &save)) {
     if (tok[0] < '0' || tok[0] > '9') continue;
     ImapUid uid = {atol(tok)};
     if (uid.v <= last.v) continue;
     char cmd[64], fetch[64];
     snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
              uid.v);
-    CurlBuf h = {0};
-    if (imapCmd(url, user, pass, cmd, &h)) {
-      configLog("imap fetch header failed uid=%ld", uid.v);
-      free(h.p);
-      break;
-    }
+    if (imapCmd(ch, cmd, h)) break;
     snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid.v);
-    CurlBuf t = {0};
-    if (imapCmd(url, user, pass, fetch, &t)) {
-      configLog("imap fetch text failed uid=%ld", uid.v);
-      free(h.p);
-      free(t.p);
-      break;
-    }
-    Input in = imapParseInput(h.p ? h.p : "", t.p ? t.p : "", uid);
-    free(h.p);
-    free(t.p);
-    RawId id = dbStoreRaw(&in);
-    if (id.v == 0) {
-      configLog("imap store raw failed uid=%ld", uid.v);
-      break;
-    }
-    Classified c;
-    classifyInput(&in, &c);
-    int is_event = c.confidence >= 0.3 && c.kind != KIND_NONE;
-    if (is_event && dbStoreEvent(id, &c)) {
-      configLog("imap store event failed uid=%ld", uid.v);
+    if (imapCmd(ch, fetch, t)) break;
+    Input in = imapParseInput(h->p, t->p, uid);
+    Ingest ing = dbIngest(&in);
+    if (ing.id.v == 0) {
+      configLog("imap ingest failed uid=%ld", uid.v);
       break;
     }
     if (uid.v > max.v) {
       max = uid;
       dbMetaUidSet(max);
     }
-    configLog("imap stored uid=%ld raw=%lld", uid.v, id.v);
+    configLog("imap stored uid=%ld raw=%lld", uid.v, ing.id.v);
   }
-  free(s.p);
 }
 
 void *imapThread(void *arg) {
   (void)arg;
-  const char *url = getenv("GENDA_IMAP_URL");
-  if (!url || !*url) return NULL; // not configured: no-op
-  const char *user = configEnv("GENDA_IMAP_USER", "");
-  const char *pass = configEnv("GENDA_IMAP_PASS", "");
+  const char *url = configEnv("GENDA_IMAP_URL", "");
+  if (!*url) return NULL; // not configured: no-op
   long every = atol(configEnv("GENDA_IMAP_POLL_SEC", "300"));
   if (every < 60) every = 60;
+  // one handle and one set of buffers for the thread's lifetime
+  CurlBuf s = {malloc(4096), 0, 4096}, h = {malloc(4096), 0, 4096}, t = {malloc(4096), 0, 4096};
+  CURL *ch = curl_easy_init();
+  if (!ch || !s.p || !h.p || !t.p) {
+    configLog("imap init failed");
+    curl_easy_cleanup(ch);
+    free(s.p);
+    free(h.p);
+    free(t.p);
+    return NULL;
+  }
+  curl_easy_setopt(ch, CURLOPT_URL, url);
+  curl_easy_setopt(ch, CURLOPT_USERNAME, configEnv("GENDA_IMAP_USER", ""));
+  curl_easy_setopt(ch, CURLOPT_PASSWORD, configEnv("GENDA_IMAP_PASS", ""));
+  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, imapCurlSink);
+  curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
+  curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 60000L);
   configLog("imap polling %s every %lds", url, every);
   for (;;) {
     sleep((unsigned)every);
-    imapPollOnce(url, user, pass);
+    imapPollOnce(ch, &s, &h, &t);
   }
   return NULL;
 }

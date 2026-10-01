@@ -225,61 +225,45 @@ int mpSkip(MpReader *r) {
 }
 
 // Read next value as NUL-terminated string (str/bin families) or scalar
-// rendered as text (uint/int/float/bool/nil->""). Returns malloc'd buf.
-char *mpStrval(MpReader *r) {
-  if (r->p >= r->end) return NULL;
+// rendered as text (uint/int/float/bool/nil->"") into out, cut to cap-1.
+int mpStrval(MpReader *r, char *out, size_t cap) {
+  if (r->p >= r->end) return -1;
   unsigned char b = *r->p;
-  long n;
-  if ((b & 0xe0) == 0xa0 || b == 0xd9) {
-    MpReader t = *r;
-    t.p++;
+  if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda || b == 0xdb || b == 0xc4 || b == 0xc5 ||
+      b == 0xc6) {
+    r->p++;
+    long n;
     if ((b & 0xe0) == 0xa0) {
       n = b & 0x1f;
-    } else {
+    } else if (b == 0xd9 || b == 0xc4) {
       unsigned char m;
-      if (mpByte(&t, &m)) return NULL;
+      if (mpByte(r, &m)) return -1;
       n = m;
-    }
-    if (t.end - t.p < n) return NULL;
-    char *s = malloc((size_t)n + 1);
-    if (!s) return NULL;
-    memcpy(s, t.p, (size_t)n);
-    s[n] = 0;
-    r->p = t.p + n;
-    return s;
-  }
-  if (b == 0xda || b == 0xdb || b == 0xc4 || b == 0xc5 || b == 0xc6) {
-    r->p++;
-    if (b == 0xda || b == 0xc5) {
-      if (r->end - r->p < 2) return NULL;
+    } else if (b == 0xda || b == 0xc5) {
+      if (r->end - r->p < 2) return -1;
       n = (r->p[0] << 8) | r->p[1];
       r->p += 2;
-    } else if (b == 0xdb || b == 0xc6) {
-      if (r->end - r->p < 4) return NULL;
+    } else {
+      if (r->end - r->p < 4) return -1;
       n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
-    } else {
-      unsigned char m;
-      if (mpByte(r, &m)) return NULL;
-      n = m;
     }
-    if (r->end - r->p < n) return NULL;
-    char *s = malloc((size_t)n + 1);
-    if (!s) return NULL;
-    memcpy(s, r->p, (size_t)n);
-    s[n] = 0;
+    if (r->end - r->p < n) return -1;
+    size_t keep = (size_t)n < cap ? (size_t)n : cap - 1;
+    memcpy(out, r->p, keep);
+    out[keep] = 0;
     r->p += n;
-    return s;
+    return 0;
   }
   if (b == 0xc0) {
     r->p++;
-    char *s = malloc(1);
-    if (s) s[0] = 0;
-    return s;
+    out[0] = 0;
+    return 0;
   }
   if (b == 0xc2 || b == 0xc3) {
     r->p++;
-    return strdup(b == 0xc3 ? "true" : "false");
+    snprintf(out, cap, "%s", b == 0xc3 ? "true" : "false");
+    return 0;
   }
   if (b < 0x80 || b >= 0xe0 || b == 0xcc || b == 0xcd || b == 0xce || b == 0xcf || b == 0xd0 ||
       b == 0xd1 || b == 0xd2 || b == 0xd3) {
@@ -293,50 +277,49 @@ char *mpStrval(MpReader *r) {
       s = (signed char)b, neg = 1;
     else if (b == 0xcc) {
       unsigned char m;
-      if (mpByte(r, &m)) return NULL;
+      if (mpByte(r, &m)) return -1;
       u = m;
     } else if (b == 0xcd) {
-      if (r->end - r->p < 2) return NULL;
+      if (r->end - r->p < 2) return -1;
       u = ((unsigned)r->p[0] << 8) | r->p[1];
       r->p += 2;
     } else if (b == 0xce) {
-      if (r->end - r->p < 4) return NULL;
+      if (r->end - r->p < 4) return -1;
       u = ((unsigned long long)r->p[0] << 24) | ((unsigned long long)r->p[1] << 16) |
           ((unsigned long long)r->p[2] << 8) | r->p[3];
       r->p += 4;
     } else if (b == 0xcf) {
-      if (r->end - r->p < 8) return NULL;
+      if (r->end - r->p < 8) return -1;
       for (int i = 0; i < 8; i++) u = (u << 8) | *r->p++;
     } else if (b == 0xd0) {
       signed char m;
-      if (mpByte(r, (unsigned char *)&m)) return NULL;
+      if (mpByte(r, (unsigned char *)&m)) return -1;
       s = m, neg = 1;
     } else if (b == 0xd1) {
-      if (r->end - r->p < 2) return NULL;
+      if (r->end - r->p < 2) return -1;
       s = (short)((r->p[0] << 8) | r->p[1]), neg = 1;
       r->p += 2;
     } else if (b == 0xd2) {
-      if (r->end - r->p < 4) return NULL;
+      if (r->end - r->p < 4) return -1;
       s = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3], neg = 1;
       r->p += 4;
     } else {
-      if (r->end - r->p < 8) return NULL;
+      if (r->end - r->p < 8) return -1;
       unsigned long long m = 0;
       for (int i = 0; i < 8; i++) m = (m << 8) | *r->p++;
       s = (long long)m, neg = 1;
     }
-    char tmp[32];
     if (neg)
-      snprintf(tmp, sizeof tmp, "%lld", s);
+      snprintf(out, cap, "%lld", s);
     else
-      snprintf(tmp, sizeof tmp, "%llu", u);
-    return strdup(tmp);
+      snprintf(out, cap, "%llu", u);
+    return 0;
   }
   if (b == 0xca || b == 0xcb) {
     r->p++;
     double v = 0;
     if (b == 0xca) {
-      if (r->end - r->p < 4) return NULL;
+      if (r->end - r->p < 4) return -1;
       unsigned u = ((unsigned)r->p[0] << 24) | ((unsigned)r->p[1] << 16) | ((unsigned)r->p[2] << 8) |
                    r->p[3];
       r->p += 4;
@@ -344,14 +327,13 @@ char *mpStrval(MpReader *r) {
       memcpy(&f, &u, 4);
       v = f;
     } else {
-      if (r->end - r->p < 8) return NULL;
+      if (r->end - r->p < 8) return -1;
       unsigned long long u = 0;
       for (int i = 0; i < 8; i++) u = (u << 8) | *r->p++;
       memcpy(&v, &u, 8);
     }
-    char tmp[32];
-    snprintf(tmp, sizeof tmp, "%g", v);
-    return strdup(tmp);
+    snprintf(out, cap, "%g", v);
+    return 0;
   }
-  return NULL;
+  return -1;
 }

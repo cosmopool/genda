@@ -1,5 +1,5 @@
-// db module tests: raw dedupe, event feed, range filter, meta — through db.h
-// against a temp sqlite file. No server, no network.
+// db module tests: ingest dedupe, event feed, range filter, meta — through
+// db.h against a temp sqlite file. No server, no network.
 #include "../../src/common.h"
 #include "../../src/config.h"
 #include "../../src/db.h"
@@ -15,13 +15,13 @@
 static char tDb[256] = "";
 
 // Build Input through the boundary parser, as /ingest does. ext "" = omitted.
-static int fillInput(Input *in, const char *ext, const char *text) {
+static int fillInput(Input *in, const char *ext, const char *title, const char *text) {
   MpWriter w = {0};
   mpMap(&w, ext[0] ? 4 : 3);
   mpStr(&w, "source");
   mpStr(&w, "notif");
   mpStr(&w, "title");
-  mpStr(&w, "Dentist visit");
+  mpStr(&w, title);
   mpStr(&w, "text");
   mpStr(&w, text);
   if (ext[0]) {
@@ -56,90 +56,71 @@ static int feedHas(const char *since, const char *until, const char *t) {
       return -1;
     }
     for (long j = 0; j < m; j++) {
-      char *k = mpStrval(&r);
-      if (!k) {
+      char k[32], v[512];
+      if (mpStrval(&r, k, sizeof k)) {
         free(w.p);
         return -1;
       }
       if (!strcmp(k, "title")) {
-        char *v = mpStrval(&r);
-        found = v && !strcmp(v, t);
-        free(v);
+        found = !mpStrval(&r, v, sizeof v) && !strcmp(v, t);
       } else if (mpSkip(&r)) {
-        free(k);
         free(w.p);
         return -1;
       }
-      free(k);
     }
   }
   free(w.p);
   return found;
 }
 
+// Titles without event keywords keep these raw-only: no events rows.
 TEST storesAndDedupesRaw(void) {
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-raw-1", "confirming"));
-  RawId first = dbStoreRaw(&in);
-  ASSERT(first.v > 0);
-  ASSERT_EQ(first.v, dbStoreRaw(&in).v);
+  ASSERT_EQ(0, fillInput(&in, "db-raw-1", "Note to self", "confirming"));
+  Ingest first = dbIngest(&in);
+  ASSERT(first.id.v > 0);
+  ASSERT_EQ(0, first.is_event);
+  ASSERT_EQ(first.id.v, dbIngest(&in).id.v);
   PASS();
 }
 
 TEST derivesMissingExtId(void) {
   Input a, b;
-  ASSERT_EQ(0, fillInput(&a, "", "unique derive body"));
-  ASSERT_EQ(0, fillInput(&b, "", "unique derive body"));
+  ASSERT_EQ(0, fillInput(&a, "", "Note to self", "unique derive body"));
+  ASSERT_EQ(0, fillInput(&b, "", "Note to self", "unique derive body"));
   ASSERT(a.time[0]); // missing time defaults to now
-  RawId first = dbStoreRaw(&a);
+  RawId first = dbIngest(&a).id;
   ASSERT(first.v > 0);
-  ASSERT_EQ(first.v, dbStoreRaw(&b).v); // same content, no ext_id: dedupes
-  ASSERT_EQ(0, fillInput(&b, "", "different body"));
-  ASSERT(dbStoreRaw(&b).v != first.v); // different content: distinct row
+  ASSERT_EQ(first.v, dbIngest(&b).id.v); // same content, no ext_id: dedupes
+  ASSERT_EQ(0, fillInput(&b, "", "Note to self", "another body"));
+  ASSERT(dbIngest(&b).id.v != first.v); // different content: distinct row
   PASS();
 }
 
 TEST storesAndFiltersEvents(void) {
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-ev-a", "confirming"));
-  RawId ra = dbStoreRaw(&in);
-  ASSERT_EQ(0, fillInput(&in, "db-ev-b", "confirming"));
-  RawId rb = dbStoreRaw(&in);
-  Classified a, b;
-  memset(&a, 0, sizeof a);
-  memset(&b, 0, sizeof b);
-  snprintf(a.title, sizeof a.title, "October visit");
-  snprintf(a.starts_at, sizeof a.starts_at, "2026-10-01T10:00:00Z");
-  a.kind = KIND_APPOINTMENT;
-  a.confidence = 0.9;
-  snprintf(b.title, sizeof b.title, "November visit");
-  snprintf(b.starts_at, sizeof b.starts_at, "2026-11-01T10:00:00Z");
-  b.kind = KIND_APPOINTMENT;
-  b.confidence = 0.8;
-  ASSERT_EQ(0, dbStoreEvent(ra, &a));
-  ASSERT_EQ(0, dbStoreEvent(rb, &b));
+  ASSERT_EQ(0, fillInput(&in, "db-ev-a", "Dentist 2026-10-01T10:00", "confirming"));
+  ASSERT(dbIngest(&in).is_event);
+  ASSERT_EQ(0, fillInput(&in, "db-ev-b", "Dentist 2026-11-01T10:00", "confirming"));
+  ASSERT(dbIngest(&in).is_event);
   ASSERT_EQ(2, feedCount("", ""));
   ASSERT_EQ(1, feedCount("2026-10-15T00:00:00Z", ""));
   ASSERT_EQ(1, feedCount("", "2026-10-15T00:00:00Z"));
-  ASSERT_EQ(1, feedHas("", "", "October visit"));
-  ASSERT_EQ(1, feedHas("2026-10-15T00:00:00Z", "", "November visit"));
-  ASSERT_EQ(0, feedHas("2026-10-15T00:00:00Z", "", "October visit"));
+  ASSERT_EQ(1, feedHas("", "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(1, feedHas("2026-10-15T00:00:00Z", "", "Dentist 2026-11-01T10:00"));
+  ASSERT_EQ(0, feedHas("2026-10-15T00:00:00Z", "", "Dentist 2026-10-01T10:00"));
   PASS();
 }
 
-TEST storeEventIsIdempotent(void) {
+TEST ingestTwiceStoresOneEvent(void) {
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-ev-twice", "confirming"));
-  RawId raw = dbStoreRaw(&in);
-  ASSERT(raw.v > 0);
-  Classified c;
-  memset(&c, 0, sizeof c);
-  snprintf(c.title, sizeof c.title, "Twice stored visit");
-  c.kind = KIND_APPOINTMENT;
-  c.confidence = 0.9;
+  ASSERT_EQ(0, fillInput(&in, "db-ev-twice", "Dentist twice", "confirming"));
   long before = feedCount("", "");
-  ASSERT_EQ(0, dbStoreEvent(raw, &c));
-  ASSERT_EQ(0, dbStoreEvent(raw, &c)); // e.g. same mail seen by IMAP again
+  Ingest first = dbIngest(&in);
+  Ingest again = dbIngest(&in); // e.g. same mail seen by IMAP again
+  ASSERT(first.id.v > 0);
+  ASSERT_EQ(first.id.v, again.id.v);
+  ASSERT(first.is_event && again.is_event);
   ASSERT_EQ(before + 1, feedCount("", ""));
   PASS();
 }
@@ -173,7 +154,7 @@ int main(int argc, char **argv) {
   RUN_TEST(storesAndDedupesRaw);
   RUN_TEST(derivesMissingExtId);
   RUN_TEST(storesAndFiltersEvents);
-  RUN_TEST(storeEventIsIdempotent);
+  RUN_TEST(ingestTwiceStoresOneEvent);
   RUN_TEST(metaRoundTrip);
   sqlite3_close(g_db);
   unlink(tDb);

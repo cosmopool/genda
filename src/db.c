@@ -1,6 +1,7 @@
 // SQLite persistence: raw inputs, classified events, IMAP progress.
 #include "db.h"
 
+#include "classify.h"
 #include "common.h"
 #include "config.h"
 #include "msgpack.h"
@@ -49,13 +50,13 @@ static void dbDjbHex(const char *a, const char *b, const char *c, char *out, siz
 // Parse msgpack map body into Input. Unknown keys skipped. Missing ext_id is
 // derived by hash of source/title/text, missing time is now. Returns 0 ok.
 int dbParseInput(const unsigned char *body, long len, Input *in) {
-  memset(in, 0, sizeof *in);
+  *in = (Input){0};
   MpReader r = {body, body + len};
   long n = mpHdrLen(&r, 0x80, 0xde, 0xdf);
   if (n < 0 || n > 64) return -1;
   for (long i = 0; i < n; i++) {
-    char *k = mpStrval(&r);
-    if (!k) return -1;
+    char k[32];
+    if (mpStrval(&r, k, sizeof k)) return -1;
     char *dst = NULL;
     size_t cap = 0;
     if (!strcmp(k, "source"))
@@ -73,18 +74,10 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
     else if (!strcmp(k, "ext_id"))
       dst = in->ext_id, cap = sizeof in->ext_id;
     if (dst) {
-      char *v = mpStrval(&r);
-      if (!v) {
-        free(k);
-        return -1;
-      }
-      snprintf(dst, cap, "%s", v);
-      free(v);
+      if (mpStrval(&r, dst, cap)) return -1;
     } else if (mpSkip(&r)) {
-      free(k);
       return -1;
     }
-    free(k);
   }
   if (!in->ext_id[0]) dbDjbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
   if (!in->time[0]) dbUtcNow(in->time, sizeof in->time);
@@ -92,7 +85,7 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
 }
 
 // Store raw input, dedupe by ext_id. Returns raw_id, {0} on error.
-RawId dbStoreRaw(const Input *in) {
+static RawId dbStoreRaw(const Input *in) {
   RawId id = {0};
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT OR IGNORE INTO raw_inputs"
@@ -123,7 +116,7 @@ static const char *const db_kind_text[] = {
     [KIND_NONE] = "none", [KIND_APPOINTMENT] = "appointment", [KIND_OBLIGATION] = "obligation"};
 
 // Idempotent: a raw_id that already has an event is left alone. Returns 0 ok.
-int dbStoreEvent(RawId raw_id, const Classified *c) {
+static int dbStoreEvent(RawId raw_id, const Classified *c) {
   char now[32];
   dbUtcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
@@ -143,6 +136,23 @@ int dbStoreEvent(RawId raw_id, const Classified *c) {
   int rc = sqlite3_step(st);
   sqlite3_finalize(st);
   return rc == SQLITE_DONE ? 0 : -1;
+}
+
+Ingest dbIngest(const Input *in) {
+  Ingest out = {0};
+  RawId id = dbStoreRaw(in);
+  if (id.v == 0) {
+    configLog("store raw: %s", sqlite3_errmsg(g_db));
+    return out;
+  }
+  Classified c = classifyInput(in);
+  if (c.is_event && dbStoreEvent(id, &c)) {
+    configLog("store event: %s", sqlite3_errmsg(g_db));
+    return out;
+  }
+  out.id = id;
+  out.is_event = c.is_event;
+  return out;
 }
 
 // Pack all events in range as msgpack array. since/until "" = unbounded.

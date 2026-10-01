@@ -14,7 +14,7 @@
 int main(void) {
   g_port = atoi(configEnv("GENDA_PORT", "8080"));
   snprintf(g_db_path, sizeof g_db_path, "%s", configEnv("GENDA_DB", "./genda.db"));
-  snprintf(g_token, sizeof g_token, "%s", getenv("GENDA_TOKEN") ? getenv("GENDA_TOKEN") : "");
+  snprintf(g_token, sizeof g_token, "%s", configEnv("GENDA_TOKEN", ""));
   curl_global_init(CURL_GLOBAL_ALL);
   if (dbOpen()) return 1;
   pthread_t imap;
