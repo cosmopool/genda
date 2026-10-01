@@ -77,6 +77,25 @@ static void imapHdrField(const char *hdrs, const char *name, char *out, size_t c
   }
 }
 
+// The only code here that fills an Input. ext_id = Message-ID, else
+// "imap-<uid>"; time = Date header, else now.
+static Input imapParseInput(const char *hdrs, const char *text, ImapUid uid) {
+  Input in = {0};
+  snprintf(in.source, sizeof in.source, "email");
+  imapHdrField(hdrs, "Subject", in.title, sizeof in.title);
+  imapHdrField(hdrs, "From", in.from, sizeof in.from);
+  imapHdrField(hdrs, "Date", in.time, sizeof in.time);
+  if (!in.time[0]) dbUtcNow(in.time, sizeof in.time);
+  char mid[256] = "";
+  imapHdrField(hdrs, "Message-ID", mid, sizeof mid);
+  if (mid[0])
+    snprintf(in.ext_id, sizeof in.ext_id, "%s", mid);
+  else
+    snprintf(in.ext_id, sizeof in.ext_id, "imap-%ld", uid.v);
+  snprintf(in.text, sizeof in.text, "%s", text);
+  return in;
+}
+
 static void imapPollOnce(const char *url, const char *user, const char *pass) {
   CurlBuf s = {0};
   if (imapCmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
@@ -85,63 +104,51 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
     return;
   }
   if (!s.p) return; // empty response; glibc strtok_r derefs a NULL save
-  long last = dbMetaUid(), max = last;
+  ImapUid last = dbMetaUid(), max = last;
   // response holds "* SEARCH 12 13 ..." possibly across lines, uids ascending.
   // Stop at the first failure so the next poll retries from that uid.
   char *save = NULL;
   for (char *tok = strtok_r(s.p, " \r\n", &save); tok; tok = strtok_r(NULL, " \r\n", &save)) {
     if (tok[0] < '0' || tok[0] > '9') continue;
-    long uid = atol(tok);
-    if (uid <= last) continue;
+    ImapUid uid = {atol(tok)};
+    if (uid.v <= last.v) continue;
     char cmd[64], fetch[64];
     snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
-             uid);
+             uid.v);
     CurlBuf h = {0};
     if (imapCmd(url, user, pass, cmd, &h)) {
-      configLog("imap fetch header failed uid=%ld", uid);
+      configLog("imap fetch header failed uid=%ld", uid.v);
       free(h.p);
       break;
     }
-    snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid);
+    snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid.v);
     CurlBuf t = {0};
     if (imapCmd(url, user, pass, fetch, &t)) {
-      configLog("imap fetch text failed uid=%ld", uid);
+      configLog("imap fetch text failed uid=%ld", uid.v);
       free(h.p);
       free(t.p);
       break;
     }
-    Input in;
-    memset(&in, 0, sizeof in);
-    snprintf(in.source, sizeof in.source, "email");
-    imapHdrField(h.p ? h.p : "", "Subject", in.title, sizeof in.title);
-    imapHdrField(h.p ? h.p : "", "From", in.from, sizeof in.from);
-    imapHdrField(h.p ? h.p : "", "Date", in.time, sizeof in.time);
-    char mid[256] = "";
-    imapHdrField(h.p ? h.p : "", "Message-ID", mid, sizeof mid);
-    if (mid[0])
-      snprintf(in.ext_id, sizeof in.ext_id, "%s", mid);
-    else
-      snprintf(in.ext_id, sizeof in.ext_id, "imap-%ld", uid);
-    if (t.p) snprintf(in.text, sizeof in.text, "%s", t.p);
+    Input in = imapParseInput(h.p ? h.p : "", t.p ? t.p : "", uid);
     free(h.p);
     free(t.p);
-    long long id = dbStoreRaw(&in);
-    if (id <= 0) {
-      configLog("imap store raw failed uid=%ld", uid);
+    RawId id = dbStoreRaw(&in);
+    if (id.v == 0) {
+      configLog("imap store raw failed uid=%ld", uid.v);
       break;
     }
     Classified c;
     classifyInput(&in, &c);
-    int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
+    int is_event = c.confidence >= 0.3 && c.kind != KIND_NONE;
     if (is_event && dbStoreEvent(id, &c)) {
-      configLog("imap store event failed uid=%ld", uid);
+      configLog("imap store event failed uid=%ld", uid.v);
       break;
     }
-    if (uid > max) {
+    if (uid.v > max.v) {
       max = uid;
       dbMetaUidSet(max);
     }
-    configLog("imap stored uid=%ld raw=%lld", uid, id);
+    configLog("imap stored uid=%ld raw=%lld", uid.v, id.v);
   }
   free(s.p);
 }

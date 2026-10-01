@@ -55,18 +55,18 @@ static void classifyHeuristic(const Input *in, Classified *c) {
                                "rent",     "tax",     "submit",  "renew",  "expir",
                                "overdue",  "payment", "fine",    NULL};
   if (classifyContainsAny(hay, appt)) {
-    snprintf(c->kind, sizeof c->kind, "appointment");
+    c->kind = KIND_APPOINTMENT;
     c->confidence = 0.45;
   } else if (classifyContainsAny(hay, oblg)) {
-    snprintf(c->kind, sizeof c->kind, "obligation");
+    c->kind = KIND_OBLIGATION;
     c->confidence = 0.45;
   } else {
-    snprintf(c->kind, sizeof c->kind, "none");
+    c->kind = KIND_NONE;
     return;
   }
   char dt[64] = "";
   if (classifyScanIsoDate(in->title, dt, sizeof dt) || classifyScanIsoDate(in->text, dt, sizeof dt)) {
-    if (!strcmp(c->kind, "obligation") && (strstr(hay, "deadline") || strstr(hay, "due")))
+    if (c->kind == KIND_OBLIGATION && (strstr(hay, "deadline") || strstr(hay, "due")))
       snprintf(c->deadline, sizeof c->deadline, "%s", dt);
     else
       snprintf(c->starts_at, sizeof c->starts_at, "%s", dt);

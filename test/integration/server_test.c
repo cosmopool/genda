@@ -33,8 +33,8 @@ static void testRespFree(Resp *r) {
   r->body = NULL;
 }
 
-static int testHreq(const char *method, const char *path, int auth, const unsigned char *body,
-                long blen, Resp *out) {
+// Send a raw request head (+ optional body) and read the whole response.
+static int testHraw(const char *hdr, int hlen, const unsigned char *body, long blen, Resp *out) {
   memset(out, 0, sizeof *out);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -47,15 +47,6 @@ static int testHreq(const char *method, const char *path, int auth, const unsign
     close(fd);
     return -1;
   }
-  char hdr[1024];
-  int hlen = snprintf(hdr, sizeof hdr, "%s %s HTTP/1.1\r\nHost: x\r\n%s%sConnection: close\r\n\r\n",
-                      method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "",
-                      body ? "Content-Type: application/msgpack\r\nContent-Length: 0\r\n" : "");
-  if (body)
-    hlen = snprintf(hdr, sizeof hdr,
-                    "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/msgpack\r\n"
-                    "Content-Length: %ld\r\nConnection: close\r\n\r\n",
-                    method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "", blen);
   // (headers + optional body, always fully written)
   size_t off = 0;
   while (off < (size_t)hlen) {
@@ -116,6 +107,19 @@ static int testHreq(const char *method, const char *path, int auth, const unsign
   out->body[out->len] = 0;
   free(buf);
   return 0;
+}
+
+static int testHreq(const char *method, const char *path, int auth, const unsigned char *body,
+                long blen, Resp *out) {
+  char hdr[1024];
+  int hlen = snprintf(hdr, sizeof hdr, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n",
+                      method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "");
+  if (body)
+    hlen = snprintf(hdr, sizeof hdr,
+                    "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/msgpack\r\n"
+                    "Content-Length: %ld\r\nConnection: close\r\n\r\n",
+                    method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "", blen);
+  return testHraw(hdr, hlen, body, blen, out);
 }
 
 // ---- tiny msgpack (test side, independent of server impl) ----------------
@@ -412,6 +416,22 @@ TEST duplicateExtIdStoresOnce(void) {
   PASS();
 }
 
+TEST malformedRequestIs400(void) {
+  const char *bad[] = {
+      "GARBAGE\r\n\r\n",
+      "POST /ingest HTTP/1.1\r\nContent-Length: -5\r\n\r\n",
+      "POST /ingest HTTP/1.1\r\nContent-Length: abc\r\n\r\n",
+      "POST /ingest HTTP/1.1\r\nContent-Length:\r\n\r\n",
+  };
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    Resp r;
+    ASSERT_EQ(0, testHraw(bad[i], (int)strlen(bad[i]), NULL, 0, &r));
+    ASSERT_EQ_FMT(400, r.status, "%d");
+    testRespFree(&r);
+  }
+  PASS();
+}
+
 // ---- runner ---------------------------------------------------------------
 
 GREATEST_MAIN_DEFS();
@@ -473,6 +493,7 @@ int main(int argc, char **argv) {
     RUN_TEST(emailBecomesObligation);
     RUN_TEST(noiseIsKeptRawButNotAnEvent);
     RUN_TEST(duplicateExtIdStoresOnce);
+    RUN_TEST(malformedRequestIs400);
   } else {
     fprintf(stderr, "server did not come up\n");
   }

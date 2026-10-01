@@ -46,7 +46,8 @@ static void dbDjbHex(const char *a, const char *b, const char *c, char *out, siz
   snprintf(out, n, "%016llx", h);
 }
 
-// Parse msgpack map body into Input. Unknown keys skipped. Returns 0 ok.
+// Parse msgpack map body into Input. Unknown keys skipped. Missing ext_id is
+// derived by hash of source/title/text, missing time is now. Returns 0 ok.
 int dbParseInput(const unsigned char *body, long len, Input *in) {
   memset(in, 0, sizeof *in);
   MpReader r = {body, body + len};
@@ -85,46 +86,44 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
     }
     free(k);
   }
+  if (!in->ext_id[0]) dbDjbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
+  if (!in->time[0]) dbUtcNow(in->time, sizeof in->time);
   return 0;
 }
 
-// Store raw input, dedupe by ext_id (derived by hash when empty).
-// Returns raw_id (>0) or -1 on error.
-long long dbStoreRaw(const Input *in) {
-  char now[32];
-  dbUtcNow(now, sizeof now);
-  char ext[128];
-  if (in->ext_id[0])
-    snprintf(ext, sizeof ext, "%s", in->ext_id);
-  else
-    dbDjbHex(in->source, in->title, in->text, ext, sizeof ext);
+// Store raw input, dedupe by ext_id. Returns raw_id, {0} on error.
+RawId dbStoreRaw(const Input *in) {
+  RawId id = {0};
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT OR IGNORE INTO raw_inputs"
                     "(source,ext_id,app,title,text,from_addr,received_at)"
                     " VALUES(?,?,?,?,?,?,?);";
-  if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
+  if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return id;
   sqlite3_bind_text(st, 1, in->source, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 2, ext, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, in->ext_id, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 3, in->app, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 4, in->title, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 5, in->text, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 6, in->from, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 7, in->time[0] ? in->time : now, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 7, in->time, -1, SQLITE_TRANSIENT);
   int rc = sqlite3_step(st);
   sqlite3_finalize(st);
-  if (rc != SQLITE_DONE && rc != SQLITE_CONSTRAINT) return -1;
+  if (rc != SQLITE_DONE && rc != SQLITE_CONSTRAINT) return id;
   st = NULL;
   if (sqlite3_prepare_v2(g_db, "SELECT id FROM raw_inputs WHERE ext_id=?;", -1, &st, NULL))
-    return -1;
-  sqlite3_bind_text(st, 1, ext, -1, SQLITE_TRANSIENT);
-  long long id = -1;
-  if (sqlite3_step(st) == SQLITE_ROW) id = sqlite3_column_int64(st, 0);
+    return id;
+  sqlite3_bind_text(st, 1, in->ext_id, -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(st) == SQLITE_ROW) id.v = sqlite3_column_int64(st, 0);
   sqlite3_finalize(st);
   return id;
 }
 
+// EventKind -> wire/SQL text. Values are a contract: never rename.
+static const char *const db_kind_text[] = {
+    [KIND_NONE] = "none", [KIND_APPOINTMENT] = "appointment", [KIND_OBLIGATION] = "obligation"};
+
 // Idempotent: a raw_id that already has an event is left alone. Returns 0 ok.
-int dbStoreEvent(long long raw_id, const Classified *c) {
+int dbStoreEvent(RawId raw_id, const Classified *c) {
   char now[32];
   dbUtcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
@@ -133,12 +132,12 @@ int dbStoreEvent(long long raw_id, const Classified *c) {
                     " SELECT ?1,?2,?3,?4,?5,?6,?7,?8"
                     " WHERE NOT EXISTS (SELECT 1 FROM events WHERE raw_id=?1);";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
-  sqlite3_bind_int64(st, 1, raw_id);
+  sqlite3_bind_int64(st, 1, raw_id.v);
   sqlite3_bind_text(st, 2, c->title, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 3, c->starts_at, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 4, c->deadline, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 5, c->location, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 6, c->kind, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 6, db_kind_text[c->kind], -1, SQLITE_TRANSIENT);
   sqlite3_bind_double(st, 7, c->confidence);
   sqlite3_bind_text(st, 8, now, -1, SQLITE_TRANSIENT);
   int rc = sqlite3_step(st);
@@ -192,20 +191,20 @@ int dbPackEvents(const char *since, const char *until, MpWriter *w) {
   return 0;
 }
 
-long dbMetaUid(void) {
+ImapUid dbMetaUid(void) {
   sqlite3_stmt *st = NULL;
-  long uid = 0;
+  ImapUid uid = {0};
   if (!sqlite3_prepare_v2(g_db, "SELECT COALESCE(v,'0') FROM meta WHERE k='imap_last_uid';",
                           -1, &st, NULL)) {
-    if (sqlite3_step(st) == SQLITE_ROW) uid = atol((const char *)sqlite3_column_text(st, 0));
+    if (sqlite3_step(st) == SQLITE_ROW) uid.v = atol((const char *)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
   }
   return uid;
 }
 
-void dbMetaUidSet(long uid) {
+void dbMetaUidSet(ImapUid uid) {
   char v[32];
-  snprintf(v, sizeof v, "%ld", uid);
+  snprintf(v, sizeof v, "%ld", uid.v);
   sqlite3_stmt *st = NULL;
   if (!sqlite3_prepare_v2(g_db, "INSERT OR REPLACE INTO meta(k,v) VALUES('imap_last_uid',?);",
                           -1, &st, NULL)) {

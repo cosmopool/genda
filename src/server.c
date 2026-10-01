@@ -21,13 +21,15 @@
 #define HDR_CAP 8192
 #define BODY_CAP (1 << 20)
 
+typedef enum { M_OTHER, M_GET, M_POST } HttpMethod;
+
+// Parsed request head. Filled only by serverParseRequest.
 typedef struct {
-  char method[8], path[1024], query[1024];
-  long content_length;
+  HttpMethod method;
+  char path[1024], query[1024];
+  long content_length; // >= 0
   char auth[512];
   char content_type[128];
-  unsigned char *body;
-  long body_len;
 } Request;
 
 static void serverSendAll(int fd, const void *buf, size_t n) {
@@ -124,44 +126,75 @@ static void serverQueryVal(const char *q, const char *key, char *out, size_t cap
   }
 }
 
+// Parse the NUL-terminated header block (request line + header lines) into
+// *r. Returns 0 ok, -1 on a malformed request line or a Content-Length that
+// is not a plain non-negative number.
+static int serverParseRequest(char *hdr, Request *r) {
+  memset(r, 0, sizeof *r);
+  char *save = NULL;
+  char *line = strtok_r(hdr, "\r\n", &save);
+  if (!line) return -1;
+
+  // request line: METHOD SP target [SP version]
+  size_t mlen = strcspn(line, " ");
+  if (mlen == 0 || line[mlen] != ' ') return -1;
+  const char *target = line + mlen + 1;
+  size_t tlen = strcspn(target, " ");
+  if (tlen == 0) return -1;
+  if (mlen == 3 && !memcmp(line, "GET", 3))
+    r->method = M_GET;
+  else if (mlen == 4 && !memcmp(line, "POST", 4))
+    r->method = M_POST;
+  else
+    r->method = M_OTHER;
+  const char *q = memchr(target, '?', tlen);
+  size_t plen = q ? (size_t)(q - target) : tlen;
+  size_t qlen = q ? tlen - plen - 1 : 0;
+  if (plen >= sizeof r->path || qlen >= sizeof r->query) return -1;
+  memcpy(r->path, target, plen);
+  r->path[plen] = 0;
+  if (q) memcpy(r->query, q + 1, qlen);
+  r->query[qlen] = 0;
+
+  for (line = strtok_r(NULL, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
+    if (!strncasecmp(line, "Content-Length:", 15)) {
+      const char *v = line + 15;
+      while (*v == ' ' || *v == '\t') v++;
+      if (!isdigit((unsigned char)*v)) return -1; // empty, signed or text
+      char *end = NULL;
+      r->content_length = strtol(v, &end, 10); // overflow saturates past BODY_CAP
+      while (*end == ' ' || *end == '\t') end++;
+      if (*end) return -1;
+    }
+    if (!strncasecmp(line, "Authorization:", 14)) {
+      const char *v = line + 14;
+      while (*v == ' ') v++;
+      snprintf(r->auth, sizeof r->auth, "%s", v);
+    }
+    if (!strncasecmp(line, "Content-Type:", 13)) {
+      const char *v = line + 13;
+      while (*v == ' ') v++;
+      snprintf(r->content_type, sizeof r->content_type, "%s", v);
+    }
+  }
+  return 0;
+}
+
 static void serverHandleConn(int fd) {
   static unsigned char hdr[HDR_CAP + 1];
   long hlen = serverReadHeaders(fd, hdr);
   if (hlen < 0) return;
   hdr[hlen] = 0;
 
-  Request r;
-  memset(&r, 0, sizeof r);
-  char target[2048] = "";
-  sscanf((char *)hdr, "%7s %2047s", r.method, target);
-  char *q = strchr(target, '?');
-  if (q) {
-    *q = 0;
-    snprintf(r.query, sizeof r.query, "%s", q + 1);
-  }
-  snprintf(r.path, sizeof r.path, "%s", target);
-
-  // headers (bound parsing to header region so strtok_r never touches body)
+  // bound parsing to header region so strtok_r never touches body
   char *eoh = strstr((char *)hdr, "\r\n\r\n");
   if (!eoh) return;
   long used = (long)(eoh - (char *)hdr) + 4;
   *eoh = 0;
-  char *save = NULL;
-  char *line = strtok_r((char *)hdr, "\r\n", &save);
-  line = strtok_r(NULL, "\r\n", &save); // skip request line
-  for (; line; line = strtok_r(NULL, "\r\n", &save)) {
-    if (!*line) break;
-    if (!strncasecmp(line, "Content-Length:", 15)) r.content_length = atol(line + 15);
-    if (!strncasecmp(line, "Authorization:", 14)) {
-      const char *v = line + 14;
-      while (*v == ' ') v++;
-      snprintf(r.auth, sizeof r.auth, "%s", v);
-    }
-    if (!strncasecmp(line, "Content-Type:", 13)) {
-      const char *v = line + 13;
-      while (*v == ' ') v++;
-      snprintf(r.content_type, sizeof r.content_type, "%s", v);
-    }
+  Request r;
+  if (serverParseRequest((char *)hdr, &r)) {
+    serverReply(fd, 400, "text/plain", "bad request", 11);
+    return;
   }
 
   long buffered = hlen - used;
@@ -169,25 +202,25 @@ static void serverHandleConn(int fd) {
     serverReply(fd, 400, "text/plain", "body too large", 14);
     return;
   }
+  unsigned char *body = NULL;
   if (r.content_length > 0) {
-    r.body = malloc((size_t)r.content_length);
-    if (!r.body) return;
+    body = malloc((size_t)r.content_length);
+    if (!body) return;
     long have = buffered > r.content_length ? r.content_length : buffered;
-    memcpy(r.body, hdr + used, (size_t)have);
+    memcpy(body, hdr + used, (size_t)have);
     while (have < r.content_length) {
-      ssize_t n = recv(fd, r.body + have, (size_t)(r.content_length - have), 0);
+      ssize_t n = recv(fd, body + have, (size_t)(r.content_length - have), 0);
       if (n <= 0) {
-        free(r.body);
+        free(body);
         return;
       }
       have += n;
     }
-    r.body_len = r.content_length;
   }
 
-  if (!strcmp(r.method, "GET") && !strcmp(r.path, "/health")) {
+  if (r.method == M_GET && !strcmp(r.path, "/health")) {
     serverReply(fd, 200, "text/plain", "ok", 2);
-  } else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/events")) {
+  } else if (r.method == M_GET && !strcmp(r.path, "/events")) {
     if (!serverAuthed(&r)) {
       serverReply(fd, 401, "text/plain", "unauthorized", 12);
     } else {
@@ -202,23 +235,23 @@ static void serverHandleConn(int fd) {
       }
       free(w.p);
     }
-  } else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/ingest")) {
+  } else if (r.method == M_POST && !strcmp(r.path, "/ingest")) {
     if (!serverAuthed(&r)) {
       serverReply(fd, 401, "text/plain", "unauthorized", 12);
     } else if (!strstr(r.content_type, "application/msgpack")) {
       serverReply(fd, 400, "text/plain", "want application/msgpack", 25);
     } else {
       Input in;
-      if (!r.body || dbParseInput(r.body, r.body_len, &in)) {
+      if (!body || dbParseInput(body, r.content_length, &in)) {
         serverReply(fd, 400, "text/plain", "bad msgpack map", 14);
       } else {
-        long long id = dbStoreRaw(&in);
-        if (id < 0) {
+        RawId id = dbStoreRaw(&in);
+        if (id.v == 0) {
           serverReply(fd, 500, "text/plain", "db error", 8);
         } else {
           Classified c;
           classifyInput(&in, &c);
-          int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
+          int is_event = c.confidence >= 0.3 && c.kind != KIND_NONE;
           int rc = 0;
           if (is_event) rc = dbStoreEvent(id, &c);
           if (rc) {
@@ -227,7 +260,7 @@ static void serverHandleConn(int fd) {
             MpWriter w = {0};
             mpMap(&w, 2);
             mpStr(&w, "raw_id");
-            mpU64(&w, (unsigned long long)id);
+            mpU64(&w, (unsigned long long)id.v);
             mpStr(&w, "is_event");
             mpU64(&w, is_event ? 1 : 0);
             serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
@@ -239,7 +272,7 @@ static void serverHandleConn(int fd) {
   } else {
     serverReply(fd, 404, "text/plain", "not found", 9);
   }
-  free(r.body);
+  free(body);
 }
 
 int serverRun(void) {

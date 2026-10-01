@@ -14,12 +14,23 @@
 
 static char tDb[256] = "";
 
-static void fillInput(Input *in, const char *ext) {
-  memset(in, 0, sizeof *in);
-  snprintf(in->source, sizeof in->source, "notif");
-  snprintf(in->title, sizeof in->title, "Dentist visit");
-  snprintf(in->text, sizeof in->text, "confirming");
-  snprintf(in->ext_id, sizeof in->ext_id, "%s", ext);
+// Build Input through the boundary parser, as /ingest does. ext "" = omitted.
+static int fillInput(Input *in, const char *ext, const char *text) {
+  MpWriter w = {0};
+  mpMap(&w, ext[0] ? 4 : 3);
+  mpStr(&w, "source");
+  mpStr(&w, "notif");
+  mpStr(&w, "title");
+  mpStr(&w, "Dentist visit");
+  mpStr(&w, "text");
+  mpStr(&w, text);
+  if (ext[0]) {
+    mpStr(&w, "ext_id");
+    mpStr(&w, ext);
+  }
+  int rc = dbParseInput(w.p, (long)w.len, in);
+  free(w.p);
+  return rc;
 }
 
 static long feedCount(const char *since, const char *until) {
@@ -68,47 +79,42 @@ static int feedHas(const char *since, const char *until, const char *t) {
 
 TEST storesAndDedupesRaw(void) {
   Input in;
-  fillInput(&in, "db-raw-1");
-  long long first = dbStoreRaw(&in);
-  ASSERT(first > 0);
-  ASSERT_EQ(first, dbStoreRaw(&in));
+  ASSERT_EQ(0, fillInput(&in, "db-raw-1", "confirming"));
+  RawId first = dbStoreRaw(&in);
+  ASSERT(first.v > 0);
+  ASSERT_EQ(first.v, dbStoreRaw(&in).v);
   PASS();
 }
 
 TEST derivesMissingExtId(void) {
   Input a, b;
-  fillInput(&a, "");
-  a.ext_id[0] = 0;
-  snprintf(a.text, sizeof a.text, "unique derive body");
-  fillInput(&b, "");
-  b.ext_id[0] = 0;
-  snprintf(b.text, sizeof b.text, "unique derive body");
-  long long first = dbStoreRaw(&a);
-  ASSERT(first > 0);
-  ASSERT_EQ(first, dbStoreRaw(&b)); // same content, no ext_id: dedupes
-  fillInput(&b, "");
-  b.ext_id[0] = 0;
-  snprintf(b.text, sizeof b.text, "different body");
-  ASSERT(dbStoreRaw(&b) != first); // different content: distinct row
+  ASSERT_EQ(0, fillInput(&a, "", "unique derive body"));
+  ASSERT_EQ(0, fillInput(&b, "", "unique derive body"));
+  ASSERT(a.time[0]); // missing time defaults to now
+  RawId first = dbStoreRaw(&a);
+  ASSERT(first.v > 0);
+  ASSERT_EQ(first.v, dbStoreRaw(&b).v); // same content, no ext_id: dedupes
+  ASSERT_EQ(0, fillInput(&b, "", "different body"));
+  ASSERT(dbStoreRaw(&b).v != first.v); // different content: distinct row
   PASS();
 }
 
 TEST storesAndFiltersEvents(void) {
   Input in;
-  fillInput(&in, "db-ev-a");
-  long long ra = dbStoreRaw(&in);
-  fillInput(&in, "db-ev-b");
-  long long rb = dbStoreRaw(&in);
+  ASSERT_EQ(0, fillInput(&in, "db-ev-a", "confirming"));
+  RawId ra = dbStoreRaw(&in);
+  ASSERT_EQ(0, fillInput(&in, "db-ev-b", "confirming"));
+  RawId rb = dbStoreRaw(&in);
   Classified a, b;
   memset(&a, 0, sizeof a);
   memset(&b, 0, sizeof b);
   snprintf(a.title, sizeof a.title, "October visit");
   snprintf(a.starts_at, sizeof a.starts_at, "2026-10-01T10:00:00Z");
-  snprintf(a.kind, sizeof a.kind, "appointment");
+  a.kind = KIND_APPOINTMENT;
   a.confidence = 0.9;
   snprintf(b.title, sizeof b.title, "November visit");
   snprintf(b.starts_at, sizeof b.starts_at, "2026-11-01T10:00:00Z");
-  snprintf(b.kind, sizeof b.kind, "appointment");
+  b.kind = KIND_APPOINTMENT;
   b.confidence = 0.8;
   ASSERT_EQ(0, dbStoreEvent(ra, &a));
   ASSERT_EQ(0, dbStoreEvent(rb, &b));
@@ -123,13 +129,13 @@ TEST storesAndFiltersEvents(void) {
 
 TEST storeEventIsIdempotent(void) {
   Input in;
-  fillInput(&in, "db-ev-twice");
-  long long raw = dbStoreRaw(&in);
-  ASSERT(raw > 0);
+  ASSERT_EQ(0, fillInput(&in, "db-ev-twice", "confirming"));
+  RawId raw = dbStoreRaw(&in);
+  ASSERT(raw.v > 0);
   Classified c;
   memset(&c, 0, sizeof c);
   snprintf(c.title, sizeof c.title, "Twice stored visit");
-  snprintf(c.kind, sizeof c.kind, "appointment");
+  c.kind = KIND_APPOINTMENT;
   c.confidence = 0.9;
   long before = feedCount("", "");
   ASSERT_EQ(0, dbStoreEvent(raw, &c));
@@ -139,9 +145,9 @@ TEST storeEventIsIdempotent(void) {
 }
 
 TEST metaRoundTrip(void) {
-  ASSERT_EQ(0, dbMetaUid());
-  dbMetaUidSet(42);
-  ASSERT_EQ(42, dbMetaUid());
+  ASSERT_EQ(0, dbMetaUid().v);
+  dbMetaUidSet((ImapUid){42});
+  ASSERT_EQ(42, dbMetaUid().v);
   PASS();
 }
 
