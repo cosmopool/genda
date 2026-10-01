@@ -84,9 +84,11 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
     free(s.p);
     return;
   }
+  if (!s.p) return; // empty response; glibc strtok_r derefs a NULL save
   long last = dbMetaUid(), max = last;
   // response holds "* SEARCH 12 13 ..." possibly across lines
-  for (char *tok = strtok(s.p, " \r\n"); tok; tok = strtok(NULL, " \r\n")) {
+  char *save = NULL;
+  for (char *tok = strtok_r(s.p, " \r\n", &save); tok; tok = strtok_r(NULL, " \r\n", &save)) {
     if (tok[0] < '0' || tok[0] > '9') continue;
     long uid = atol(tok);
     if (uid <= last) continue;

@@ -124,14 +124,15 @@ static void serverHandleConn(int fd) {
   }
   snprintf(r.path, sizeof r.path, "%s", target);
 
-  // headers (bound parsing to header region so strtok never touches body)
+  // headers (bound parsing to header region so strtok_r never touches body)
   char *eoh = strstr((char *)hdr, "\r\n\r\n");
   if (!eoh) return;
   long used = (long)(eoh - (char *)hdr) + 4;
   *eoh = 0;
-  char *line = strtok((char *)hdr, "\r\n");
-  line = strtok(NULL, "\r\n"); // skip request line
-  for (; line; line = strtok(NULL, "\r\n")) {
+  char *save = NULL;
+  char *line = strtok_r((char *)hdr, "\r\n", &save);
+  line = strtok_r(NULL, "\r\n", &save); // skip request line
+  for (; line; line = strtok_r(NULL, "\r\n", &save)) {
     if (!*line) break;
     if (!strncasecmp(line, "Content-Length:", 15)) r.content_length = atol(line + 15);
     if (!strncasecmp(line, "Authorization:", 14)) {
