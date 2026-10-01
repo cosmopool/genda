@@ -29,7 +29,7 @@ typedef struct {
   long body_len;
 } Request;
 
-static void send_all(int fd, const void *buf, size_t n) {
+static void sendAll(int fd, const void *buf, size_t n) {
   const unsigned char *p = buf;
   while (n > 0) {
     ssize_t w = send(fd, p, n, 0);
@@ -45,8 +45,8 @@ static void reply(int fd, int code, const char *ctype, const void *body, long n)
   int hlen = snprintf(hdr, sizeof hdr,
                       "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
                       code, msg, ctype, n);
-  send_all(fd, hdr, (size_t)hlen);
-  if (n > 0) send_all(fd, body, (size_t)n);
+  sendAll(fd, hdr, (size_t)hlen);
+  if (n > 0) sendAll(fd, body, (size_t)n);
 }
 
 static int authed(const Request *r) {
@@ -57,7 +57,7 @@ static int authed(const Request *r) {
 }
 
 // Read until "\r\n\r\n" or HDR_CAP. Returns header bytes, or -1 on error.
-static long read_headers(int fd, unsigned char *hdr) {
+static long readHeaders(int fd, unsigned char *hdr) {
   long got = 0;
   while (got < HDR_CAP) {
     ssize_t n = recv(fd, hdr + got, (size_t)(HDR_CAP - got), 0);
@@ -69,7 +69,7 @@ static long read_headers(int fd, unsigned char *hdr) {
 }
 
 // Percent-decode src into dst (dst size cap).
-static void url_decode(const char *src, char *dst, size_t cap) {
+static void urlDecode(const char *src, char *dst, size_t cap) {
   size_t o = 0;
   for (; *src && o + 1 < cap; src++) {
     if (*src == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
@@ -85,7 +85,7 @@ static void url_decode(const char *src, char *dst, size_t cap) {
   dst[o] = 0;
 }
 
-static void query_val(const char *q, const char *key, char *out, size_t cap) {
+static void queryVal(const char *q, const char *key, char *out, size_t cap) {
   out[0] = 0;
   size_t klen = strlen(key);
   for (const char *p = q; *p;) {
@@ -97,7 +97,7 @@ static void query_val(const char *q, const char *key, char *out, size_t cap) {
       if (n >= sizeof tmp) n = sizeof tmp - 1;
       memcpy(tmp, v, n);
       tmp[n] = 0;
-      url_decode(tmp, out, cap);
+      urlDecode(tmp, out, cap);
       return;
     }
     p = strchr(p, '&');
@@ -106,9 +106,9 @@ static void query_val(const char *q, const char *key, char *out, size_t cap) {
   }
 }
 
-static void handle_conn(int fd) {
+static void handleConn(int fd) {
   static unsigned char hdr[HDR_CAP + 1];
-  long hlen = read_headers(fd, hdr);
+  long hlen = readHeaders(fd, hdr);
   if (hlen < 0) return;
   hdr[hlen] = 0;
 
@@ -173,10 +173,10 @@ static void handle_conn(int fd) {
       reply(fd, 401, "text/plain", "unauthorized", 12);
     } else {
       char since[64] = "", until[64] = "";
-      query_val(r.query, "since", since, sizeof since);
-      query_val(r.query, "until", until, sizeof until);
-      MPW w = {0};
-      if (pack_events(since, until, &w)) {
+      queryVal(r.query, "since", since, sizeof since);
+      queryVal(r.query, "until", until, sizeof until);
+      MpWriter w = {0};
+      if (packEvents(since, until, &w)) {
         reply(fd, 500, "text/plain", "db error", 8);
       } else {
         reply(fd, 200, "application/msgpack", w.p, (long)w.len);
@@ -190,15 +190,15 @@ static void handle_conn(int fd) {
       reply(fd, 400, "text/plain", "want application/msgpack", 25);
     } else {
       Input in;
-      if (!r.body || parse_input(r.body, r.body_len, &in)) {
+      if (!r.body || parseInput(r.body, r.body_len, &in)) {
         reply(fd, 400, "text/plain", "bad msgpack map", 14);
       } else {
-        long long id = store_raw(&in);
+        long long id = storeRaw(&in);
         if (id < 0) {
           reply(fd, 500, "text/plain", "db error", 8);
         } else {
           Classified c;
-          classify_input(&in, &c);
+          classifyInput(&in, &c);
           int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
           int rc = 0;
           if (is_event) {
@@ -211,17 +211,17 @@ static void handle_conn(int fd) {
               have = sqlite3_step(q) == SQLITE_ROW;
               sqlite3_finalize(q);
             }
-            if (!have) rc = store_event(id, &c);
+            if (!have) rc = storeEvent(id, &c);
           }
           if (rc) {
             reply(fd, 500, "text/plain", "db error", 8);
           } else {
-            MPW w = {0};
-            mp_map(&w, 2);
-            mp_str(&w, "raw_id");
-            mp_u64(&w, (unsigned long long)id);
-            mp_str(&w, "is_event");
-            mp_u64(&w, is_event ? 1 : 0);
+            MpWriter w = {0};
+            mpMap(&w, 2);
+            mpStr(&w, "raw_id");
+            mpU64(&w, (unsigned long long)id);
+            mpStr(&w, "is_event");
+            mpU64(&w, is_event ? 1 : 0);
             reply(fd, 200, "application/msgpack", w.p, (long)w.len);
             free(w.p);
           }
@@ -234,7 +234,7 @@ static void handle_conn(int fd) {
   free(r.body);
 }
 
-int server_run(void) {
+int serverRun(void) {
   int srv = socket(AF_INET, SOCK_STREAM, 0);
   if (srv < 0) {
     perror("socket");
@@ -255,11 +255,11 @@ int server_run(void) {
     perror("listen");
     return 1;
   }
-  log_msg("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
+  logMsg("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
   for (;;) {
     int fd = accept(srv, NULL, NULL);
     if (fd < 0) continue;
-    handle_conn(fd);
+    handleConn(fd);
     close(fd);
   }
   return 0;

@@ -18,7 +18,7 @@ typedef struct {
   size_t len, cap;
 } CurlBuf;
 
-static size_t curl_sink(void *ptr, size_t size, size_t n, void *ud) {
+static size_t curlSink(void *ptr, size_t size, size_t n, void *ud) {
   CurlBuf *b = ud;
   size_t want = size * n;
   if (b->len + want + 1 > b->cap) {
@@ -37,7 +37,7 @@ static size_t curl_sink(void *ptr, size_t size, size_t n, void *ud) {
 }
 
 // One IMAP command; captures the untagged response text. Returns 0 ok.
-static int imap_cmd(const char *url, const char *user, const char *pass, const char *cmd,
+static int imapCmd(const char *url, const char *user, const char *pass, const char *cmd,
                     CurlBuf *out) {
   CURL *ch = curl_easy_init();
   if (!ch) return -1;
@@ -45,7 +45,7 @@ static int imap_cmd(const char *url, const char *user, const char *pass, const c
   curl_easy_setopt(ch, CURLOPT_USERNAME, user);
   curl_easy_setopt(ch, CURLOPT_PASSWORD, pass);
   curl_easy_setopt(ch, CURLOPT_CUSTOMREQUEST, cmd);
-  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curl_sink);
+  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curlSink);
   curl_easy_setopt(ch, CURLOPT_WRITEDATA, out);
   curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
   curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 60000L);
@@ -55,7 +55,7 @@ static int imap_cmd(const char *url, const char *user, const char *pass, const c
 }
 
 // Unfold + extract a header field value into out.
-static void hdr_field(const char *hdrs, const char *name, char *out, size_t cap) {
+static void hdrField(const char *hdrs, const char *name, char *out, size_t cap) {
   out[0] = 0;
   size_t nlen = strlen(name);
   for (const char *p = hdrs; *p; p++) {
@@ -76,14 +76,14 @@ static void hdr_field(const char *hdrs, const char *name, char *out, size_t cap)
   }
 }
 
-static void imap_poll_once(const char *url, const char *user, const char *pass) {
+static void imapPollOnce(const char *url, const char *user, const char *pass) {
   CurlBuf s = {0};
-  if (imap_cmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
-    log_msg("imap search failed");
+  if (imapCmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
+    logMsg("imap search failed");
     free(s.p);
     return;
   }
-  long last = meta_uid(), max = last;
+  long last = metaUid(), max = last;
   // response holds "* SEARCH 12 13 ..." possibly across lines
   for (char *tok = strtok(s.p, " \r\n"); tok; tok = strtok(NULL, " \r\n")) {
     if (tok[0] < '0' || tok[0] > '9') continue;
@@ -93,13 +93,13 @@ static void imap_poll_once(const char *url, const char *user, const char *pass) 
     snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
              uid);
     CurlBuf h = {0};
-    if (imap_cmd(url, user, pass, cmd, &h)) {
+    if (imapCmd(url, user, pass, cmd, &h)) {
       free(h.p);
       continue;
     }
     snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid);
     CurlBuf t = {0};
-    if (imap_cmd(url, user, pass, fetch, &t)) {
+    if (imapCmd(url, user, pass, fetch, &t)) {
       free(h.p);
       free(t.p);
       continue;
@@ -107,11 +107,11 @@ static void imap_poll_once(const char *url, const char *user, const char *pass) 
     Input in;
     memset(&in, 0, sizeof in);
     snprintf(in.source, sizeof in.source, "email");
-    hdr_field(h.p ? h.p : "", "Subject", in.title, sizeof in.title);
-    hdr_field(h.p ? h.p : "", "From", in.from, sizeof in.from);
-    hdr_field(h.p ? h.p : "", "Date", in.time, sizeof in.time);
+    hdrField(h.p ? h.p : "", "Subject", in.title, sizeof in.title);
+    hdrField(h.p ? h.p : "", "From", in.from, sizeof in.from);
+    hdrField(h.p ? h.p : "", "Date", in.time, sizeof in.time);
     char mid[256] = "";
-    hdr_field(h.p ? h.p : "", "Message-ID", mid, sizeof mid);
+    hdrField(h.p ? h.p : "", "Message-ID", mid, sizeof mid);
     if (mid[0])
       snprintf(in.ext_id, sizeof in.ext_id, "%s", mid);
     else
@@ -119,33 +119,33 @@ static void imap_poll_once(const char *url, const char *user, const char *pass) 
     if (t.p) snprintf(in.text, sizeof in.text, "%s", t.p);
     free(h.p);
     free(t.p);
-    long long id = store_raw(&in);
+    long long id = storeRaw(&in);
     if (id > 0) {
       Classified c;
-      classify_input(&in, &c);
-      if (c.confidence >= 0.3 && strcmp(c.kind, "none")) store_event(id, &c);
+      classifyInput(&in, &c);
+      if (c.confidence >= 0.3 && strcmp(c.kind, "none")) storeEvent(id, &c);
     }
     if (uid > max) {
       max = uid;
-      meta_uid_set(max);
+      metaUidSet(max);
     }
-    log_msg("imap stored uid=%ld raw=%lld", uid, id);
+    logMsg("imap stored uid=%ld raw=%lld", uid, id);
   }
   free(s.p);
 }
 
-void *imap_thread(void *arg) {
+void *imapThread(void *arg) {
   (void)arg;
   const char *url = getenv("GENDA_IMAP_URL");
   if (!url || !*url) return NULL; // not configured: no-op
-  const char *user = env_or("GENDA_IMAP_USER", "");
-  const char *pass = env_or("GENDA_IMAP_PASS", "");
-  long every = atol(env_or("GENDA_IMAP_POLL_SEC", "300"));
+  const char *user = envOr("GENDA_IMAP_USER", "");
+  const char *pass = envOr("GENDA_IMAP_PASS", "");
+  long every = atol(envOr("GENDA_IMAP_POLL_SEC", "300"));
   if (every < 60) every = 60;
-  log_msg("imap polling %s every %lds", url, every);
+  logMsg("imap polling %s every %lds", url, every);
   for (;;) {
     sleep((unsigned)every);
-    imap_poll_once(url, user, pass);
+    imapPollOnce(url, user, pass);
   }
   return NULL;
 }

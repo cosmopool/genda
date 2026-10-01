@@ -3,6 +3,6 @@
 #ifndef GENDA_IMAP_H
 #define GENDA_IMAP_H
 
-void *imap_thread(void *arg);
+void *imapThread(void *arg);
 
 #endif

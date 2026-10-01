@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void mp_reserve(MPW *w, size_t extra) {
+void mpReserve(MpWriter *w, size_t extra) {
   if (w->len + extra <= w->cap) return;
   size_t ncap = w->cap ? w->cap * 2 : 256;
   while (ncap < w->len + extra) ncap *= 2;
@@ -13,71 +13,71 @@ void mp_reserve(MPW *w, size_t extra) {
   w->cap = ncap;
 }
 
-static void mp_b(MPW *w, unsigned char b) {
-  mp_reserve(w, 1);
+static void mpB(MpWriter *w, unsigned char b) {
+  mpReserve(w, 1);
   w->p[w->len++] = b;
 }
 
-void mp_map(MPW *w, unsigned long n) {
-  if (n < 16) return mp_b(w, (unsigned char)(0x80 | n));
-  mp_reserve(w, 3);
+void mpMap(MpWriter *w, unsigned long n) {
+  if (n < 16) return mpB(w, (unsigned char)(0x80 | n));
+  mpReserve(w, 3);
   w->p[w->len++] = 0xde;
   w->p[w->len++] = (unsigned char)(n >> 8);
   w->p[w->len++] = (unsigned char)n;
 }
 
-void mp_arr(MPW *w, unsigned long n) {
-  if (n < 16) return mp_b(w, (unsigned char)(0x90 | n));
-  mp_reserve(w, 3);
+void mpArr(MpWriter *w, unsigned long n) {
+  if (n < 16) return mpB(w, (unsigned char)(0x90 | n));
+  mpReserve(w, 3);
   w->p[w->len++] = 0xdc;
   w->p[w->len++] = (unsigned char)(n >> 8);
   w->p[w->len++] = (unsigned char)n;
 }
 
-void mp_str(MPW *w, const char *s) {
+void mpStr(MpWriter *w, const char *s) {
   size_t n = strlen(s);
   if (n < 32) {
-    mp_b(w, (unsigned char)(0xa0 | n));
+    mpB(w, (unsigned char)(0xa0 | n));
   } else if (n < 256) {
-    mp_reserve(w, 2);
+    mpReserve(w, 2);
     w->p[w->len++] = 0xd9;
     w->p[w->len++] = (unsigned char)n;
   } else {
-    mp_reserve(w, 3);
+    mpReserve(w, 3);
     w->p[w->len++] = 0xda;
     w->p[w->len++] = (unsigned char)(n >> 8);
     w->p[w->len++] = (unsigned char)n;
   }
-  mp_reserve(w, n);
+  mpReserve(w, n);
   memcpy(w->p + w->len, s, n);
   w->len += n;
 }
 
-void mp_u64(MPW *w, unsigned long long v) {
-  if (v < 128) return mp_b(w, (unsigned char)v);
-  mp_reserve(w, 9);
+void mpU64(MpWriter *w, unsigned long long v) {
+  if (v < 128) return mpB(w, (unsigned char)v);
+  mpReserve(w, 9);
   w->p[w->len++] = 0xcf;
   for (int i = 7; i >= 0; i--) w->p[w->len++] = (unsigned char)(v >> (i * 8));
 }
 
-void mp_f64(MPW *w, double v) {
-  mp_reserve(w, 9);
+void mpF64(MpWriter *w, double v) {
+  mpReserve(w, 9);
   w->p[w->len++] = 0xcb;
   unsigned long long u;
   memcpy(&u, &v, 8);
   for (int i = 7; i >= 0; i--) w->p[w->len++] = (unsigned char)(u >> (i * 8));
 }
 
-static int mp_byte(MPR *r, unsigned char *out) {
+static int mpByte(MpReader *r, unsigned char *out) {
   if (r->p >= r->end) return -1;
   *out = *r->p++;
   return 0;
 }
 
 // If next value is map/array header, return length. Else -1.
-long mp_hdr_len(MPR *r, unsigned char fix, unsigned char b16, unsigned char b32) {
+long mpHdrLen(MpReader *r, unsigned char fix, unsigned char b16, unsigned char b32) {
   unsigned char b;
-  if (mp_byte(r, &b)) return -1;
+  if (mpByte(r, &b)) return -1;
   if ((b & 0xf0) == fix) return b & 0x0f;
   if (b == b16) {
     if (r->end - r->p < 2) return -1;
@@ -94,15 +94,15 @@ long mp_hdr_len(MPR *r, unsigned char fix, unsigned char b16, unsigned char b32)
   return -1;
 }
 
-int mp_skip(MPR *r);
+int mpSkip(MpReader *r);
 
-static int mp_skip_n(MPR *r, long n) {
+static int mpSkipN(MpReader *r, long n) {
   if (r->end - r->p < n) return -1;
   r->p += n;
   return 0;
 }
 
-int mp_skip(MPR *r) {
+int mpSkip(MpReader *r) {
   if (r->p >= r->end) return -1;
   unsigned char b = *r->p;
   if (b < 0x80 || (b >= 0xe0)) {
@@ -112,20 +112,20 @@ int mp_skip(MPR *r) {
   if ((b & 0xe0) == 0xa0) { // fixstr
     long n = b & 0x1f;
     r->p++;
-    return mp_skip_n(r, n);
+    return mpSkipN(r, n);
   }
   if ((b & 0xf0) == 0x80) { // fixmap
     long n = b & 0x0f;
     r->p++;
     for (long i = 0; i < n; i++)
-      if (mp_skip(r) || mp_skip(r)) return -1;
+      if (mpSkip(r) || mpSkip(r)) return -1;
     return 0;
   }
   if ((b & 0xf0) == 0x90) { // fixarray
     long n = b & 0x0f;
     r->p++;
     for (long i = 0; i < n; i++)
-      if (mp_skip(r)) return -1;
+      if (mpSkip(r)) return -1;
     return 0;
   }
   r->p++;
@@ -135,27 +135,27 @@ int mp_skip(MPR *r) {
   case 0xc3: // true
     return 0;
   case 0xcc:
-    return mp_skip_n(r, 1);
+    return mpSkipN(r, 1);
   case 0xcd:
-    return mp_skip_n(r, 2);
+    return mpSkipN(r, 2);
   case 0xce:
-    return mp_skip_n(r, 4);
+    return mpSkipN(r, 4);
   case 0xcf:
   case 0xd3:
   case 0xcb:
-    return mp_skip_n(r, 8);
+    return mpSkipN(r, 8);
   case 0xd0:
-    return mp_skip_n(r, 1);
+    return mpSkipN(r, 1);
   case 0xd1:
-    return mp_skip_n(r, 2);
+    return mpSkipN(r, 2);
   case 0xd2:
-    return mp_skip_n(r, 4);
+    return mpSkipN(r, 4);
   case 0xca:
-    return mp_skip_n(r, 4);
+    return mpSkipN(r, 4);
   case 0xd9: {
     unsigned char n;
-    if (mp_byte(r, &n)) return -1;
-    return mp_skip_n(r, n);
+    if (mpByte(r, &n)) return -1;
+    return mpSkipN(r, n);
   }
   case 0xda:
   case 0xdb: {
@@ -170,28 +170,28 @@ int mp_skip(MPR *r) {
       n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
-    return mp_skip_n(r, n);
+    return mpSkipN(r, n);
   }
   case 0xdc:
   case 0xdd: {
-    MPR t = *r;
+    MpReader t = *r;
     t.p--;
-    long n = mp_hdr_len(&t, 0, 0xdc, 0xdd);
+    long n = mpHdrLen(&t, 0, 0xdc, 0xdd);
     if (n < 0) return -1;
     *r = t;
     for (long i = 0; i < n; i++)
-      if (mp_skip(r)) return -1;
+      if (mpSkip(r)) return -1;
     return 0;
   }
   case 0xde:
   case 0xdf: {
-    MPR t = *r;
+    MpReader t = *r;
     t.p--;
-    long n = mp_hdr_len(&t, 0, 0xde, 0xdf);
+    long n = mpHdrLen(&t, 0, 0xde, 0xdf);
     if (n < 0) return -1;
     *r = t;
     for (long i = 0; i < n; i++)
-      if (mp_skip(r) || mp_skip(r)) return -1;
+      if (mpSkip(r) || mpSkip(r)) return -1;
     return 0;
   }
   case 0xc4:
@@ -201,7 +201,7 @@ int mp_skip(MPR *r) {
     long n = -1;
     if (b == 0xc4) {
       unsigned char m;
-      if (mp_byte(r, &m)) return -1;
+      if (mpByte(r, &m)) return -1;
       n = m;
     } else if (b == 0xc5) {
       if (r->end - r->p < 2) return -1;
@@ -212,7 +212,7 @@ int mp_skip(MPR *r) {
       n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
-    return mp_skip_n(r, n);
+    return mpSkipN(r, n);
   }
   default:
     return -1;
@@ -221,16 +221,16 @@ int mp_skip(MPR *r) {
 
 // Read next value as NUL-terminated string (str/bin families) or scalar
 // rendered as text (uint/int/float/bool/nil->""). Returns malloc'd buf.
-char *mp_strval(MPR *r) {
+char *mpStrval(MpReader *r) {
   if (r->p >= r->end) return NULL;
   unsigned char b = *r->p;
   long n;
   if ((b & 0xe0) == 0xa0 || b == 0xd9) {
-    MPR t = *r;
+    MpReader t = *r;
     t.p++;
     if ((b & 0xe0) == 0xa0)
       n = b & 0x1f;
-    else if (mp_byte(&t, (unsigned char *)&n))
+    else if (mpByte(&t, (unsigned char *)&n))
       return NULL;
     if (t.end - t.p < n) return NULL;
     char *s = malloc((size_t)n + 1);
@@ -252,7 +252,7 @@ char *mp_strval(MPR *r) {
       r->p += 4;
     } else {
       unsigned char m;
-      if (mp_byte(r, &m)) return NULL;
+      if (mpByte(r, &m)) return NULL;
       n = m;
     }
     if (r->end - r->p < n) return NULL;
@@ -285,7 +285,7 @@ char *mp_strval(MPR *r) {
       s = (signed char)b, neg = 1;
     else if (b == 0xcc) {
       unsigned char m;
-      if (mp_byte(r, &m)) return NULL;
+      if (mpByte(r, &m)) return NULL;
       u = m;
     } else if (b == 0xcd) {
       if (r->end - r->p < 2) return NULL;
@@ -301,7 +301,7 @@ char *mp_strval(MPR *r) {
       for (int i = 0; i < 8; i++) u = (u << 8) | *r->p++;
     } else if (b == 0xd0) {
       signed char m;
-      if (mp_byte(r, (unsigned char *)&m)) return NULL;
+      if (mpByte(r, (unsigned char *)&m)) return NULL;
       s = m, neg = 1;
     } else if (b == 0xd1) {
       if (r->end - r->p < 2) return NULL;

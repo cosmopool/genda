@@ -9,16 +9,16 @@
 #include <string.h>
 #include <time.h>
 
-void utc_now(char *out, size_t n) {
+void utcNow(char *out, size_t n) {
   time_t t = time(NULL);
   struct tm tm;
   gmtime_r(&t, &tm);
   strftime(out, n, "%Y-%m-%dT%H:%M:%SZ", &tm);
 }
 
-int db_open(void) {
+int dbOpen(void) {
   if (sqlite3_open(g_db_path, &g_db)) {
-    log_msg("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
+    logMsg("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
     return -1;
   }
   const char *schema = "CREATE TABLE IF NOT EXISTS raw_inputs("
@@ -30,14 +30,14 @@ int db_open(void) {
                        "CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY,v TEXT);";
   char *err = NULL;
   if (sqlite3_exec(g_db, schema, NULL, NULL, &err)) {
-    log_msg("schema: %s", err ? err : "?");
+    logMsg("schema: %s", err ? err : "?");
     sqlite3_free(err);
     return -1;
   }
   return 0;
 }
 
-static void djb_hex(const char *a, const char *b, const char *c, char *out, size_t n) {
+static void djbHex(const char *a, const char *b, const char *c, char *out, size_t n) {
   unsigned long long h = 5381;
   for (const char *s = a; s && *s; s++) h = h * 33 + (unsigned char)*s;
   for (const char *s = b; s && *s; s++) h = h * 33 + (unsigned char)*s;
@@ -46,13 +46,13 @@ static void djb_hex(const char *a, const char *b, const char *c, char *out, size
 }
 
 // Parse msgpack map body into Input. Unknown keys skipped. Returns 0 ok.
-int parse_input(const unsigned char *body, long len, Input *in) {
+int parseInput(const unsigned char *body, long len, Input *in) {
   memset(in, 0, sizeof *in);
-  MPR r = {body, body + len};
-  long n = mp_hdr_len(&r, 0x80, 0xde, 0xdf);
+  MpReader r = {body, body + len};
+  long n = mpHdrLen(&r, 0x80, 0xde, 0xdf);
   if (n < 0 || n > 64) return -1;
   for (long i = 0; i < n; i++) {
-    char *k = mp_strval(&r);
+    char *k = mpStrval(&r);
     if (!k) return -1;
     char *dst = NULL;
     size_t cap = 0;
@@ -71,27 +71,27 @@ int parse_input(const unsigned char *body, long len, Input *in) {
     else if (!strcmp(k, "ext_id"))
       dst = in->ext_id, cap = sizeof in->ext_id;
     if (dst) {
-      char *v = mp_strval(&r);
+      char *v = mpStrval(&r);
       if (!v) {
         free(k);
         return -1;
       }
       snprintf(dst, cap, "%s", v);
       free(v);
-    } else if (mp_skip(&r)) {
+    } else if (mpSkip(&r)) {
       free(k);
       return -1;
     }
     free(k);
   }
-  if (!in->ext_id[0]) djb_hex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
+  if (!in->ext_id[0]) djbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
   return 0;
 }
 
 // Store raw input, dedupe by ext_id. Returns raw_id (>0) or -1 on error.
-long long store_raw(const Input *in) {
+long long storeRaw(const Input *in) {
   char now[32];
-  utc_now(now, sizeof now);
+  utcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT OR IGNORE INTO raw_inputs"
                     "(source,ext_id,app,title,text,from_addr,received_at)"
@@ -117,9 +117,9 @@ long long store_raw(const Input *in) {
   return id;
 }
 
-int store_event(long long raw_id, const Classified *c) {
+int storeEvent(long long raw_id, const Classified *c) {
   char now[32];
-  utc_now(now, sizeof now);
+  utcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT INTO events"
                     "(raw_id,title,starts_at,deadline,location,kind,confidence,created_at)"
@@ -139,7 +139,7 @@ int store_event(long long raw_id, const Classified *c) {
 }
 
 // Pack all events in range as msgpack array. since/until "" = unbounded.
-int pack_events(const char *since, const char *until, MPW *w) {
+int packEvents(const char *since, const char *until, MpWriter *w) {
   sqlite3_stmt *st = NULL;
   const char *sql = "SELECT id,raw_id,title,starts_at,deadline,location,kind,confidence,created_at"
                     " FROM events WHERE (?1='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)>=?1)"
@@ -148,7 +148,7 @@ int pack_events(const char *since, const char *until, MPW *w) {
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
   sqlite3_bind_text(st, 1, since, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 2, until, -1, SQLITE_TRANSIENT);
-  MPW items = {0};
+  MpWriter items = {0};
   unsigned long count = 0;
   const char *keys[7] = {"title", "starts_at", "deadline", "location", "kind", "", "created_at"};
   while (sqlite3_step(st) == SQLITE_ROW) {
@@ -159,24 +159,24 @@ int pack_events(const char *since, const char *until, MPW *w) {
                            (const char *)sqlite3_column_text(st, 6),
                            NULL,
                            (const char *)sqlite3_column_text(st, 8)};
-    mp_map(&items, 9);
-    mp_str(&items, "id");
-    mp_u64(&items, (unsigned long long)sqlite3_column_int64(st, 0));
-    mp_str(&items, "raw_id");
-    mp_u64(&items, (unsigned long long)sqlite3_column_int64(st, 1));
+    mpMap(&items, 9);
+    mpStr(&items, "id");
+    mpU64(&items, (unsigned long long)sqlite3_column_int64(st, 0));
+    mpStr(&items, "raw_id");
+    mpU64(&items, (unsigned long long)sqlite3_column_int64(st, 1));
     for (int i = 0; i < 7; i++) {
       if (i == 5) continue;
-      mp_str(&items, keys[i]);
-      mp_str(&items, cols[i] ? cols[i] : "");
+      mpStr(&items, keys[i]);
+      mpStr(&items, cols[i] ? cols[i] : "");
     }
-    mp_str(&items, "confidence");
-    mp_f64(&items, sqlite3_column_double(st, 7));
+    mpStr(&items, "confidence");
+    mpF64(&items, sqlite3_column_double(st, 7));
     count++;
   }
   sqlite3_finalize(st);
-  mp_arr(w, count);
+  mpArr(w, count);
   if (count) {
-    mp_reserve(w, items.len);
+    mpReserve(w, items.len);
     memcpy(w->p + w->len, items.p, items.len);
     w->len += items.len;
   }
@@ -184,7 +184,7 @@ int pack_events(const char *since, const char *until, MPW *w) {
   return 0;
 }
 
-long meta_uid(void) {
+long metaUid(void) {
   sqlite3_stmt *st = NULL;
   long uid = 0;
   if (!sqlite3_prepare_v2(g_db, "SELECT v FROM meta WHERE k='imap_last_uid';", -1, &st, NULL)) {
@@ -194,7 +194,7 @@ long meta_uid(void) {
   return uid;
 }
 
-void meta_uid_set(long uid) {
+void metaUidSet(long uid) {
   char v[32];
   snprintf(v, sizeof v, "%ld", uid);
   sqlite3_stmt *st = NULL;

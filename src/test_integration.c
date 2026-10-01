@@ -28,7 +28,7 @@ typedef struct {
   long len;
 } Resp;
 
-static void resp_free(Resp *r) {
+static void respFree(Resp *r) {
   free(r->body);
   r->body = NULL;
 }
@@ -135,12 +135,12 @@ static void bput(Buf *b, const void *s, size_t n) {
   b->len += n;
 }
 
-static void pk_map(Buf *b, unsigned n) {
+static void pkMap(Buf *b, unsigned n) {
   unsigned char h = (unsigned char)(0x80 | n);
   bput(b, &h, 1);
 }
 
-static void pk_str(Buf *b, const char *s) {
+static void pkStr(Buf *b, const char *s) {
   size_t n = strlen(s);
   if (n < 32) {
     unsigned char h = (unsigned char)(0xa0 | n);
@@ -153,17 +153,17 @@ static void pk_str(Buf *b, const char *s) {
 }
 
 // pack {k0:v0, ...} from parallel arrays
-static void pk_input(Buf *b, const char *keys[], const char *vals[], int n) {
-  pk_map(b, (unsigned)n);
+static void pkInput(Buf *b, const char *keys[], const char *vals[], int n) {
+  pkMap(b, (unsigned)n);
   for (int i = 0; i < n; i++) {
-    pk_str(b, keys[i]);
-    pk_str(b, vals[i]);
+    pkStr(b, keys[i]);
+    pkStr(b, vals[i]);
   }
 }
 
-typedef enum { N_NIL, N_BOOL, N_UINT, N_STR, N_ARR, N_MAP, N_DBL } NType;
+typedef enum { N_NIL, N_BOOL, N_UINT, N_STR, N_ARR, N_MAP, N_DBL } NodeType;
 typedef struct Node {
-  NType t;
+  NodeType t;
   unsigned long long u;
   double d;
   char *s;
@@ -185,7 +185,7 @@ static void nfree(Node *nd) {
 
 static Node *parse(Cur *c);
 
-static unsigned long long be_u(Cur *c, int n) {
+static unsigned long long beU(Cur *c, int n) {
   unsigned long long v = 0;
   for (int i = 0; i < n; i++) v = (v << 8) | c->p[i];
   c->p += n;
@@ -199,7 +199,7 @@ static Node *parse(Cur *c) {
   if (!nd) return NULL;
   if ((b & 0xf0) == 0x80 || b == 0xde || b == 0xdf) {
     unsigned long n = (b & 0xf0) == 0x80 ? (unsigned)(b & 0x0f)
-                                         : b == 0xde ? (unsigned)be_u(c, 2) : (unsigned)be_u(c, 4);
+                                         : b == 0xde ? (unsigned)beU(c, 2) : (unsigned)beU(c, 4);
     nd->t = N_MAP;
     nd->n = n * 2;
     nd->items = calloc(nd->n ? nd->n : 1, sizeof *nd->items);
@@ -212,7 +212,7 @@ static Node *parse(Cur *c) {
   }
   if ((b & 0xf0) == 0x90 || b == 0xdc || b == 0xdd) {
     unsigned long n = (b & 0xf0) == 0x90 ? (unsigned)(b & 0x0f)
-                                         : b == 0xdc ? (unsigned)be_u(c, 2) : (unsigned)be_u(c, 4);
+                                         : b == 0xdc ? (unsigned)beU(c, 2) : (unsigned)beU(c, 4);
     nd->t = N_ARR;
     nd->n = n;
     nd->items = calloc(n ? n : 1, sizeof *nd->items);
@@ -225,7 +225,7 @@ static Node *parse(Cur *c) {
   }
   if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda) {
     unsigned long n = (b & 0xe0) == 0xa0 ? (unsigned)(b & 0x1f)
-                                         : b == 0xd9 ? (unsigned)be_u(c, 1) : (unsigned)be_u(c, 2);
+                                         : b == 0xd9 ? (unsigned)beU(c, 1) : (unsigned)beU(c, 2);
     if (c->end - c->p < (long)n) {
       nfree(nd);
       return NULL;
@@ -244,11 +244,11 @@ static Node *parse(Cur *c) {
   }
   if (b == 0xcf) {
     nd->t = N_UINT;
-    nd->u = be_u(c, 8);
+    nd->u = beU(c, 8);
     return nd;
   }
   if (b == 0xcb) {
-    unsigned long long u = be_u(c, 8);
+    unsigned long long u = beU(c, 8);
     nd->t = N_DBL;
     memcpy(&nd->d, &u, 8);
     return nd;
@@ -273,7 +273,7 @@ static Node *mget(Node *map, const char *key) {
   return NULL;
 }
 
-static Node *find_by_title(Node *arr, const char *title) {
+static Node *findByTitle(Node *arr, const char *title) {
   if (!arr || arr->t != N_ARR) return NULL;
   for (unsigned long i = 0; i < arr->n; i++) {
     Node *t = mget(arr->items[i], "title");
@@ -284,7 +284,7 @@ static Node *find_by_title(Node *arr, const char *title) {
 
 // ---- db peek (resulting state) -------------------------------------------
 
-static long db_count(const char *sql) {
+static long dbCount(const char *sql) {
   sqlite3 *db = NULL;
   if (sqlite3_open(g_db, &db)) return -1;
   sqlite3_stmt *st = NULL;
@@ -298,23 +298,23 @@ static long db_count(const char *sql) {
 
 // ---- cases ----------------------------------------------------------------
 
-TEST auth_is_enforced(void) {
+TEST authIsEnforced(void) {
   Resp r;
   ASSERT_EQ(0, hreq("POST", "/ingest", 0, (unsigned char *)"x", 1, &r));
   ASSERT_EQ(401, r.status);
-  resp_free(&r);
+  respFree(&r);
   ASSERT_EQ(0, hreq("GET", "/events", 0, NULL, 0, &r));
   ASSERT_EQ(401, r.status);
-  resp_free(&r);
+  respFree(&r);
   PASS();
 }
 
-TEST notification_becomes_appointment(void) {
+TEST notificationBecomesAppointment(void) {
   Buf b = {0};
   const char *k[] = {"source", "app", "title", "text", "time", "from", "ext_id"};
   const char *v[] = {"notif", "Gmail", "Dentist 2026-10-01T10:00", "confirming your visit",
                      "2026-09-30T09:00:00Z", "dentist@x.com", "t-appt-1"};
-  pk_input(&b, k, v, 7);
+  pkInput(&b, k, v, 7);
   Resp r;
   ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
@@ -324,7 +324,7 @@ TEST notification_becomes_appointment(void) {
   Node *ev = mget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 1);
   nfree(m);
-  resp_free(&r);
+  respFree(&r);
   free(b.p);
 
   ASSERT_EQ(0, hreq("GET", "/events", 1, NULL, 0, &r));
@@ -332,46 +332,46 @@ TEST notification_becomes_appointment(void) {
   Cur c2 = {r.body, r.body + r.len};
   Node *arr = parse(&c2);
   ASSERT(arr && arr->t == N_ARR);
-  Node *found = find_by_title(arr, "Dentist 2026-10-01T10:00");
+  Node *found = findByTitle(arr, "Dentist 2026-10-01T10:00");
   ASSERT(found);
   Node *kind = mget(found, "kind");
   ASSERT(kind && kind->t == N_STR);
   ASSERT_STR_EQ("appointment", kind->s);
   nfree(arr);
-  resp_free(&r);
+  respFree(&r);
   PASS();
 }
 
-TEST email_becomes_obligation(void) {
+TEST emailBecomesObligation(void) {
   Buf b = {0};
   const char *k[] = {"source", "app", "title", "text", "time", "from", "ext_id"};
   const char *v[] = {"email", "billing@power.com", "Invoice due 2026-10-05", "please pay by Friday",
                      "2026-09-30T08:00:00Z", "billing@power.com", "t-oblg-1"};
-  pk_input(&b, k, v, 7);
+  pkInput(&b, k, v, 7);
   Resp r;
   ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
-  resp_free(&r);
+  respFree(&r);
   free(b.p);
 
   ASSERT_EQ(0, hreq("GET", "/events", 1, NULL, 0, &r));
   Cur c = {r.body, r.body + r.len};
   Node *arr = parse(&c);
-  Node *found = find_by_title(arr, "Invoice due 2026-10-05");
+  Node *found = findByTitle(arr, "Invoice due 2026-10-05");
   ASSERT(found);
   ASSERT_STR_EQ("obligation", mget(found, "kind")->s);
   nfree(arr);
-  resp_free(&r);
+  respFree(&r);
   PASS();
 }
 
-TEST noise_is_kept_raw_but_not_an_event(void) {
-  long raws_before = db_count("SELECT COUNT(*) FROM raw_inputs;");
-  long evs_before = db_count("SELECT COUNT(*) FROM events;");
+TEST noiseIsKeptRawButNotAnEvent(void) {
+  long raws_before = dbCount("SELECT COUNT(*) FROM raw_inputs;");
+  long evs_before = dbCount("SELECT COUNT(*) FROM events;");
   Buf b = {0};
   const char *k[] = {"title", "text", "ext_id"};
   const char *v[] = {"meme of the day", "haha look at this", "t-none-1"};
-  pk_input(&b, k, v, 3);
+  pkInput(&b, k, v, 3);
   Resp r;
   ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
@@ -380,18 +380,18 @@ TEST noise_is_kept_raw_but_not_an_event(void) {
   Node *ev = mget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 0);
   nfree(m);
-  resp_free(&r);
+  respFree(&r);
   free(b.p);
-  ASSERT_EQ(raws_before + 1, db_count("SELECT COUNT(*) FROM raw_inputs;"));
-  ASSERT_EQ(evs_before, db_count("SELECT COUNT(*) FROM events;"));
+  ASSERT_EQ(raws_before + 1, dbCount("SELECT COUNT(*) FROM raw_inputs;"));
+  ASSERT_EQ(evs_before, dbCount("SELECT COUNT(*) FROM events;"));
   PASS();
 }
 
-TEST duplicate_ext_id_stores_once(void) {
+TEST duplicateExtIdStoresOnce(void) {
   Buf b = {0};
   const char *k[] = {"source", "title", "text", "ext_id"};
   const char *v[] = {"notif", "Flight 2026-11-02T07:30", "boarding pass", "t-dup-1"};
-  pk_input(&b, k, v, 4);
+  pkInput(&b, k, v, 4);
   Resp r1, r2;
   ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r1));
   ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r2));
@@ -403,11 +403,11 @@ TEST duplicate_ext_id_stores_once(void) {
   ASSERT_EQ(mget(m1, "raw_id")->u, mget(m2, "raw_id")->u);
   nfree(m1);
   nfree(m2);
-  resp_free(&r1);
-  resp_free(&r2);
+  respFree(&r1);
+  respFree(&r2);
   free(b.p);
-  ASSERT_EQ(1, db_count("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
-  ASSERT_EQ(1, db_count("SELECT COUNT(*) FROM events WHERE raw_id="
+  ASSERT_EQ(1, dbCount("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
+  ASSERT_EQ(1, dbCount("SELECT COUNT(*) FROM events WHERE raw_id="
                         "(SELECT id FROM raw_inputs WHERE ext_id='t-dup-1');"));
   PASS();
 }
@@ -416,12 +416,12 @@ TEST duplicate_ext_id_stores_once(void) {
 
 GREATEST_MAIN_DEFS();
 
-static int wait_healthy(void) {
+static int waitHealthy(void) {
   for (int i = 0; i < 50; i++) {
     Resp r;
     if (!hreq("GET", "/health", 0, NULL, 0, &r)) {
       int ok = r.status == 200;
-      resp_free(&r);
+      respFree(&r);
       if (ok) return 0;
     }
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 100000000};
@@ -465,13 +465,13 @@ int main(int argc, char **argv) {
     execl("./genda", "genda", (char *)NULL);
     _exit(127);
   }
-  int came_up = !wait_healthy() && kill(g_child, 0) == 0;
+  int came_up = !waitHealthy() && kill(g_child, 0) == 0;
   if (came_up) {
-    RUN_TEST(auth_is_enforced);
-    RUN_TEST(notification_becomes_appointment);
-    RUN_TEST(email_becomes_obligation);
-    RUN_TEST(noise_is_kept_raw_but_not_an_event);
-    RUN_TEST(duplicate_ext_id_stores_once);
+    RUN_TEST(authIsEnforced);
+    RUN_TEST(notificationBecomesAppointment);
+    RUN_TEST(emailBecomesObligation);
+    RUN_TEST(noiseIsKeptRawButNotAnEvent);
+    RUN_TEST(duplicateExtIdStoresOnce);
   } else {
     fprintf(stderr, "server did not come up\n");
   }

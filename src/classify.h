@@ -6,6 +6,6 @@
 
 // TODO: real classifier (LLM) lands here. Mock = keyword heuristic only.
 // Stores nothing; returns 0 always (result is in *c).
-int classify_input(const Input *in, Classified *c);
+int classifyInput(const Input *in, Classified *c);
 
 #endif

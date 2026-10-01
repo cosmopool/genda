@@ -4,6 +4,6 @@
 #define GENDA_SERVER_H
 
 // Bind, listen, serve until a fatal socket error. Returns 1 on fatal error.
-int server_run(void);
+int serverRun(void);
 
 #endif
