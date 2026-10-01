@@ -195,7 +195,8 @@ int dbPackEvents(const char *since, const char *until, MpWriter *w) {
 long dbMetaUid(void) {
   sqlite3_stmt *st = NULL;
   long uid = 0;
-  if (!sqlite3_prepare_v2(g_db, "SELECT v FROM meta WHERE k='imap_last_uid';", -1, &st, NULL)) {
+  if (!sqlite3_prepare_v2(g_db, "SELECT COALESCE(v,'0') FROM meta WHERE k='imap_last_uid';",
+                          -1, &st, NULL)) {
     if (sqlite3_step(st) == SQLITE_ROW) uid = atol((const char *)sqlite3_column_text(st, 0));
     sqlite3_finalize(st);
   }
