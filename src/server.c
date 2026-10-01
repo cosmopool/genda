@@ -41,7 +41,24 @@ static void serverSendAll(int fd, const void *buf, size_t n) {
 }
 
 static void serverReply(int fd, int code, const char *ctype, const void *body, long n) {
-  const char *msg = code == 200 ? "OK" : code == 401 ? "Unauthorized" : code == 404 ? "Not Found" : "Bad Request";
+  const char *msg;
+  switch (code) {
+  case 200:
+    msg = "OK";
+    break;
+  case 401:
+    msg = "Unauthorized";
+    break;
+  case 404:
+    msg = "Not Found";
+    break;
+  case 500:
+    msg = "Internal Server Error";
+    break;
+  default:
+    msg = "Bad Request";
+    break;
+  }
   char hdr[512];
   int hlen = snprintf(hdr, sizeof hdr,
                       "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
