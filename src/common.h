@@ -21,7 +21,7 @@ extern char g_db_path[1024];
 extern char g_token[256];
 extern sqlite3 *g_db;
 
-void logMsg(const char *fmt, ...);
-const char *envOr(const char *k, const char *dflt);
+void mainLog(const char *fmt, ...);
+const char *mainEnv(const char *k, const char *dflt);
 
 #endif

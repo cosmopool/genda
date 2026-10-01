@@ -18,7 +18,7 @@ typedef struct {
   size_t len, cap;
 } CurlBuf;
 
-static size_t curlSink(void *ptr, size_t size, size_t n, void *ud) {
+static size_t imapCurlSink(void *ptr, size_t size, size_t n, void *ud) {
   CurlBuf *b = ud;
   size_t want = size * n;
   if (b->len + want + 1 > b->cap) {
@@ -45,7 +45,7 @@ static int imapCmd(const char *url, const char *user, const char *pass, const ch
   curl_easy_setopt(ch, CURLOPT_USERNAME, user);
   curl_easy_setopt(ch, CURLOPT_PASSWORD, pass);
   curl_easy_setopt(ch, CURLOPT_CUSTOMREQUEST, cmd);
-  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, curlSink);
+  curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, imapCurlSink);
   curl_easy_setopt(ch, CURLOPT_WRITEDATA, out);
   curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
   curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 60000L);
@@ -55,7 +55,7 @@ static int imapCmd(const char *url, const char *user, const char *pass, const ch
 }
 
 // Unfold + extract a header field value into out.
-static void hdrField(const char *hdrs, const char *name, char *out, size_t cap) {
+static void imapHdrField(const char *hdrs, const char *name, char *out, size_t cap) {
   out[0] = 0;
   size_t nlen = strlen(name);
   for (const char *p = hdrs; *p; p++) {
@@ -79,11 +79,11 @@ static void hdrField(const char *hdrs, const char *name, char *out, size_t cap) 
 static void imapPollOnce(const char *url, const char *user, const char *pass) {
   CurlBuf s = {0};
   if (imapCmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
-    logMsg("imap search failed");
+    mainLog("imap search failed");
     free(s.p);
     return;
   }
-  long last = metaUid(), max = last;
+  long last = dbMetaUid(), max = last;
   // response holds "* SEARCH 12 13 ..." possibly across lines
   for (char *tok = strtok(s.p, " \r\n"); tok; tok = strtok(NULL, " \r\n")) {
     if (tok[0] < '0' || tok[0] > '9') continue;
@@ -107,11 +107,11 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
     Input in;
     memset(&in, 0, sizeof in);
     snprintf(in.source, sizeof in.source, "email");
-    hdrField(h.p ? h.p : "", "Subject", in.title, sizeof in.title);
-    hdrField(h.p ? h.p : "", "From", in.from, sizeof in.from);
-    hdrField(h.p ? h.p : "", "Date", in.time, sizeof in.time);
+    imapHdrField(h.p ? h.p : "", "Subject", in.title, sizeof in.title);
+    imapHdrField(h.p ? h.p : "", "From", in.from, sizeof in.from);
+    imapHdrField(h.p ? h.p : "", "Date", in.time, sizeof in.time);
     char mid[256] = "";
-    hdrField(h.p ? h.p : "", "Message-ID", mid, sizeof mid);
+    imapHdrField(h.p ? h.p : "", "Message-ID", mid, sizeof mid);
     if (mid[0])
       snprintf(in.ext_id, sizeof in.ext_id, "%s", mid);
     else
@@ -119,17 +119,17 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
     if (t.p) snprintf(in.text, sizeof in.text, "%s", t.p);
     free(h.p);
     free(t.p);
-    long long id = storeRaw(&in);
+    long long id = dbStoreRaw(&in);
     if (id > 0) {
       Classified c;
       classifyInput(&in, &c);
-      if (c.confidence >= 0.3 && strcmp(c.kind, "none")) storeEvent(id, &c);
+      if (c.confidence >= 0.3 && strcmp(c.kind, "none")) dbStoreEvent(id, &c);
     }
     if (uid > max) {
       max = uid;
-      metaUidSet(max);
+      dbMetaUidSet(max);
     }
-    logMsg("imap stored uid=%ld raw=%lld", uid, id);
+    mainLog("imap stored uid=%ld raw=%lld", uid, id);
   }
   free(s.p);
 }
@@ -138,11 +138,11 @@ void *imapThread(void *arg) {
   (void)arg;
   const char *url = getenv("GENDA_IMAP_URL");
   if (!url || !*url) return NULL; // not configured: no-op
-  const char *user = envOr("GENDA_IMAP_USER", "");
-  const char *pass = envOr("GENDA_IMAP_PASS", "");
-  long every = atol(envOr("GENDA_IMAP_POLL_SEC", "300"));
+  const char *user = mainEnv("GENDA_IMAP_USER", "");
+  const char *pass = mainEnv("GENDA_IMAP_PASS", "");
+  long every = atol(mainEnv("GENDA_IMAP_POLL_SEC", "300"));
   if (every < 60) every = 60;
-  logMsg("imap polling %s every %lds", url, every);
+  mainLog("imap polling %s every %lds", url, every);
   for (;;) {
     sleep((unsigned)every);
     imapPollOnce(url, user, pass);

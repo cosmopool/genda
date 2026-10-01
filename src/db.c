@@ -9,7 +9,7 @@
 #include <string.h>
 #include <time.h>
 
-void utcNow(char *out, size_t n) {
+void dbUtcNow(char *out, size_t n) {
   time_t t = time(NULL);
   struct tm tm;
   gmtime_r(&t, &tm);
@@ -18,7 +18,7 @@ void utcNow(char *out, size_t n) {
 
 int dbOpen(void) {
   if (sqlite3_open(g_db_path, &g_db)) {
-    logMsg("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
+    mainLog("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
     return -1;
   }
   const char *schema = "CREATE TABLE IF NOT EXISTS raw_inputs("
@@ -30,14 +30,14 @@ int dbOpen(void) {
                        "CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY,v TEXT);";
   char *err = NULL;
   if (sqlite3_exec(g_db, schema, NULL, NULL, &err)) {
-    logMsg("schema: %s", err ? err : "?");
+    mainLog("schema: %s", err ? err : "?");
     sqlite3_free(err);
     return -1;
   }
   return 0;
 }
 
-static void djbHex(const char *a, const char *b, const char *c, char *out, size_t n) {
+static void dbDjbHex(const char *a, const char *b, const char *c, char *out, size_t n) {
   unsigned long long h = 5381;
   for (const char *s = a; s && *s; s++) h = h * 33 + (unsigned char)*s;
   for (const char *s = b; s && *s; s++) h = h * 33 + (unsigned char)*s;
@@ -46,7 +46,7 @@ static void djbHex(const char *a, const char *b, const char *c, char *out, size_
 }
 
 // Parse msgpack map body into Input. Unknown keys skipped. Returns 0 ok.
-int parseInput(const unsigned char *body, long len, Input *in) {
+int dbParseInput(const unsigned char *body, long len, Input *in) {
   memset(in, 0, sizeof *in);
   MpReader r = {body, body + len};
   long n = mpHdrLen(&r, 0x80, 0xde, 0xdf);
@@ -84,14 +84,14 @@ int parseInput(const unsigned char *body, long len, Input *in) {
     }
     free(k);
   }
-  if (!in->ext_id[0]) djbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
+  if (!in->ext_id[0]) dbDjbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
   return 0;
 }
 
 // Store raw input, dedupe by ext_id. Returns raw_id (>0) or -1 on error.
-long long storeRaw(const Input *in) {
+long long dbStoreRaw(const Input *in) {
   char now[32];
-  utcNow(now, sizeof now);
+  dbUtcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT OR IGNORE INTO raw_inputs"
                     "(source,ext_id,app,title,text,from_addr,received_at)"
@@ -117,9 +117,9 @@ long long storeRaw(const Input *in) {
   return id;
 }
 
-int storeEvent(long long raw_id, const Classified *c) {
+int dbStoreEvent(long long raw_id, const Classified *c) {
   char now[32];
-  utcNow(now, sizeof now);
+  dbUtcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT INTO events"
                     "(raw_id,title,starts_at,deadline,location,kind,confidence,created_at)"
@@ -139,7 +139,7 @@ int storeEvent(long long raw_id, const Classified *c) {
 }
 
 // Pack all events in range as msgpack array. since/until "" = unbounded.
-int packEvents(const char *since, const char *until, MpWriter *w) {
+int dbPackEvents(const char *since, const char *until, MpWriter *w) {
   sqlite3_stmt *st = NULL;
   const char *sql = "SELECT id,raw_id,title,starts_at,deadline,location,kind,confidence,created_at"
                     " FROM events WHERE (?1='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)>=?1)"
@@ -184,7 +184,7 @@ int packEvents(const char *since, const char *until, MpWriter *w) {
   return 0;
 }
 
-long metaUid(void) {
+long dbMetaUid(void) {
   sqlite3_stmt *st = NULL;
   long uid = 0;
   if (!sqlite3_prepare_v2(g_db, "SELECT v FROM meta WHERE k='imap_last_uid';", -1, &st, NULL)) {
@@ -194,7 +194,7 @@ long metaUid(void) {
   return uid;
 }
 
-void metaUidSet(long uid) {
+void dbMetaUidSet(long uid) {
   char v[32];
   snprintf(v, sizeof v, "%ld", uid);
   sqlite3_stmt *st = NULL;

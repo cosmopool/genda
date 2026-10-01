@@ -29,7 +29,7 @@ typedef struct {
   long body_len;
 } Request;
 
-static void sendAll(int fd, const void *buf, size_t n) {
+static void serverSendAll(int fd, const void *buf, size_t n) {
   const unsigned char *p = buf;
   while (n > 0) {
     ssize_t w = send(fd, p, n, 0);
@@ -39,17 +39,17 @@ static void sendAll(int fd, const void *buf, size_t n) {
   }
 }
 
-static void reply(int fd, int code, const char *ctype, const void *body, long n) {
+static void serverReply(int fd, int code, const char *ctype, const void *body, long n) {
   const char *msg = code == 200 ? "OK" : code == 401 ? "Unauthorized" : code == 404 ? "Not Found" : "Bad Request";
   char hdr[512];
   int hlen = snprintf(hdr, sizeof hdr,
                       "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
                       code, msg, ctype, n);
-  sendAll(fd, hdr, (size_t)hlen);
-  if (n > 0) sendAll(fd, body, (size_t)n);
+  serverSendAll(fd, hdr, (size_t)hlen);
+  if (n > 0) serverSendAll(fd, body, (size_t)n);
 }
 
-static int authed(const Request *r) {
+static int serverAuthed(const Request *r) {
   if (!g_token[0]) return 1; // dev: no token configured, allow local
   char want[768];
   snprintf(want, sizeof want, "Bearer %s", g_token);
@@ -57,7 +57,7 @@ static int authed(const Request *r) {
 }
 
 // Read until "\r\n\r\n" or HDR_CAP. Returns header bytes, or -1 on error.
-static long readHeaders(int fd, unsigned char *hdr) {
+static long serverReadHeaders(int fd, unsigned char *hdr) {
   long got = 0;
   while (got < HDR_CAP) {
     ssize_t n = recv(fd, hdr + got, (size_t)(HDR_CAP - got), 0);
@@ -69,7 +69,7 @@ static long readHeaders(int fd, unsigned char *hdr) {
 }
 
 // Percent-decode src into dst (dst size cap).
-static void urlDecode(const char *src, char *dst, size_t cap) {
+static void serverUrlDecode(const char *src, char *dst, size_t cap) {
   size_t o = 0;
   for (; *src && o + 1 < cap; src++) {
     if (*src == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
@@ -85,7 +85,7 @@ static void urlDecode(const char *src, char *dst, size_t cap) {
   dst[o] = 0;
 }
 
-static void queryVal(const char *q, const char *key, char *out, size_t cap) {
+static void serverQueryVal(const char *q, const char *key, char *out, size_t cap) {
   out[0] = 0;
   size_t klen = strlen(key);
   for (const char *p = q; *p;) {
@@ -97,7 +97,7 @@ static void queryVal(const char *q, const char *key, char *out, size_t cap) {
       if (n >= sizeof tmp) n = sizeof tmp - 1;
       memcpy(tmp, v, n);
       tmp[n] = 0;
-      urlDecode(tmp, out, cap);
+      serverUrlDecode(tmp, out, cap);
       return;
     }
     p = strchr(p, '&');
@@ -106,9 +106,9 @@ static void queryVal(const char *q, const char *key, char *out, size_t cap) {
   }
 }
 
-static void handleConn(int fd) {
+static void serverHandleConn(int fd) {
   static unsigned char hdr[HDR_CAP + 1];
-  long hlen = readHeaders(fd, hdr);
+  long hlen = serverReadHeaders(fd, hdr);
   if (hlen < 0) return;
   hdr[hlen] = 0;
 
@@ -147,7 +147,7 @@ static void handleConn(int fd) {
 
   long buffered = hlen - used;
   if (r.content_length > BODY_CAP) {
-    reply(fd, 400, "text/plain", "body too large", 14);
+    serverReply(fd, 400, "text/plain", "body too large", 14);
     return;
   }
   if (r.content_length > 0) {
@@ -167,35 +167,35 @@ static void handleConn(int fd) {
   }
 
   if (!strcmp(r.method, "GET") && !strcmp(r.path, "/health")) {
-    reply(fd, 200, "text/plain", "ok", 2);
+    serverReply(fd, 200, "text/plain", "ok", 2);
   } else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/events")) {
-    if (!authed(&r)) {
-      reply(fd, 401, "text/plain", "unauthorized", 12);
+    if (!serverAuthed(&r)) {
+      serverReply(fd, 401, "text/plain", "unauthorized", 12);
     } else {
       char since[64] = "", until[64] = "";
-      queryVal(r.query, "since", since, sizeof since);
-      queryVal(r.query, "until", until, sizeof until);
+      serverQueryVal(r.query, "since", since, sizeof since);
+      serverQueryVal(r.query, "until", until, sizeof until);
       MpWriter w = {0};
-      if (packEvents(since, until, &w)) {
-        reply(fd, 500, "text/plain", "db error", 8);
+      if (dbPackEvents(since, until, &w)) {
+        serverReply(fd, 500, "text/plain", "db error", 8);
       } else {
-        reply(fd, 200, "application/msgpack", w.p, (long)w.len);
+        serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
       }
       free(w.p);
     }
   } else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/ingest")) {
-    if (!authed(&r)) {
-      reply(fd, 401, "text/plain", "unauthorized", 12);
+    if (!serverAuthed(&r)) {
+      serverReply(fd, 401, "text/plain", "unauthorized", 12);
     } else if (!strstr(r.content_type, "application/msgpack")) {
-      reply(fd, 400, "text/plain", "want application/msgpack", 25);
+      serverReply(fd, 400, "text/plain", "want application/msgpack", 25);
     } else {
       Input in;
-      if (!r.body || parseInput(r.body, r.body_len, &in)) {
-        reply(fd, 400, "text/plain", "bad msgpack map", 14);
+      if (!r.body || dbParseInput(r.body, r.body_len, &in)) {
+        serverReply(fd, 400, "text/plain", "bad msgpack map", 14);
       } else {
-        long long id = storeRaw(&in);
+        long long id = dbStoreRaw(&in);
         if (id < 0) {
-          reply(fd, 500, "text/plain", "db error", 8);
+          serverReply(fd, 500, "text/plain", "db error", 8);
         } else {
           Classified c;
           classifyInput(&in, &c);
@@ -211,10 +211,10 @@ static void handleConn(int fd) {
               have = sqlite3_step(q) == SQLITE_ROW;
               sqlite3_finalize(q);
             }
-            if (!have) rc = storeEvent(id, &c);
+            if (!have) rc = dbStoreEvent(id, &c);
           }
           if (rc) {
-            reply(fd, 500, "text/plain", "db error", 8);
+            serverReply(fd, 500, "text/plain", "db error", 8);
           } else {
             MpWriter w = {0};
             mpMap(&w, 2);
@@ -222,14 +222,14 @@ static void handleConn(int fd) {
             mpU64(&w, (unsigned long long)id);
             mpStr(&w, "is_event");
             mpU64(&w, is_event ? 1 : 0);
-            reply(fd, 200, "application/msgpack", w.p, (long)w.len);
+            serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
             free(w.p);
           }
         }
       }
     }
   } else {
-    reply(fd, 404, "text/plain", "not found", 9);
+    serverReply(fd, 404, "text/plain", "not found", 9);
   }
   free(r.body);
 }
@@ -255,11 +255,11 @@ int serverRun(void) {
     perror("listen");
     return 1;
   }
-  logMsg("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
+  mainLog("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
   for (;;) {
     int fd = accept(srv, NULL, NULL);
     if (fd < 0) continue;
-    handleConn(fd);
+    serverHandleConn(fd);
     close(fd);
   }
   return 0;

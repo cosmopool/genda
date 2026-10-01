@@ -9,20 +9,20 @@
 #include <stdio.h>
 #include <string.h>
 
-static void lowerCopy(const char *src, char *dst, size_t cap) {
+static void classifyLowerCopy(const char *src, char *dst, size_t cap) {
   size_t i = 0;
   for (; src[i] && i + 1 < cap; i++) dst[i] = (char)tolower((unsigned char)src[i]);
   dst[i] = 0;
 }
 
-static int containsAny(const char *hay, const char *words[]) {
+static int classifyContainsAny(const char *hay, const char *words[]) {
   for (int i = 0; words[i]; i++)
     if (strstr(hay, words[i])) return 1;
   return 0;
 }
 
 // First YYYY-MM-DD([T ]HH:MM) occurrence -> out. Returns 1 found.
-static int scanIsoDate(const char *s, char *out, size_t cap) {
+static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
   for (; *s; s++) {
     int Y, M, D, h = -1, m = -1;
     if (sscanf(s, "%4d-%2d-%2d", &Y, &M, &D) == 3 && Y >= 2020 && Y <= 2100 && M >= 1 &&
@@ -44,17 +44,17 @@ static void classifyHeuristic(const Input *in, Classified *c) {
   char hay[4608];
   char tmp[4608];
   snprintf(tmp, sizeof tmp, "%s %s", in->title, in->text);
-  lowerCopy(tmp, hay, sizeof hay);
+  classifyLowerCopy(tmp, hay, sizeof hay);
   static const char *appt[] = {"meeting",  "appointment", "call",     "interview", "dentist",
                                "doctor",   "flight",      "booking",  "reservation", "conference",
                                "webinar",  "standup",     "ceremony", "party",     NULL};
   static const char *oblg[] = {"deadline", "due",     "invoice", "bill",   "pay",
                                "rent",     "tax",     "submit",  "renew",  "expir",
                                "overdue",  "payment", "fine",    NULL};
-  if (containsAny(hay, appt)) {
+  if (classifyContainsAny(hay, appt)) {
     snprintf(c->kind, sizeof c->kind, "appointment");
     c->confidence = 0.45;
-  } else if (containsAny(hay, oblg)) {
+  } else if (classifyContainsAny(hay, oblg)) {
     snprintf(c->kind, sizeof c->kind, "obligation");
     c->confidence = 0.45;
   } else {
@@ -62,7 +62,7 @@ static void classifyHeuristic(const Input *in, Classified *c) {
     return;
   }
   char dt[64] = "";
-  if (scanIsoDate(in->title, dt, sizeof dt) || scanIsoDate(in->text, dt, sizeof dt)) {
+  if (classifyScanIsoDate(in->title, dt, sizeof dt) || classifyScanIsoDate(in->text, dt, sizeof dt)) {
     if (!strcmp(c->kind, "obligation") && (strstr(hay, "deadline") || strstr(hay, "due")))
       snprintf(c->deadline, sizeof c->deadline, "%s", dt);
     else

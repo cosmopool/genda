@@ -28,12 +28,12 @@ typedef struct {
   long len;
 } Resp;
 
-static void respFree(Resp *r) {
+static void testRespFree(Resp *r) {
   free(r->body);
   r->body = NULL;
 }
 
-static int hreq(const char *method, const char *path, int auth, const unsigned char *body,
+static int testHreq(const char *method, const char *path, int auth, const unsigned char *body,
                 long blen, Resp *out) {
   memset(out, 0, sizeof *out);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -125,7 +125,7 @@ typedef struct {
   size_t len, cap;
 } Buf;
 
-static void bput(Buf *b, const void *s, size_t n) {
+static void testBput(Buf *b, const void *s, size_t n) {
   if (b->len + n > b->cap) {
     b->cap = b->cap ? b->cap * 2 : 256;
     while (b->cap < b->len + n) b->cap *= 2;
@@ -135,29 +135,29 @@ static void bput(Buf *b, const void *s, size_t n) {
   b->len += n;
 }
 
-static void pkMap(Buf *b, unsigned n) {
+static void testPkMap(Buf *b, unsigned n) {
   unsigned char h = (unsigned char)(0x80 | n);
-  bput(b, &h, 1);
+  testBput(b, &h, 1);
 }
 
-static void pkStr(Buf *b, const char *s) {
+static void testPkStr(Buf *b, const char *s) {
   size_t n = strlen(s);
   if (n < 32) {
     unsigned char h = (unsigned char)(0xa0 | n);
-    bput(b, &h, 1);
+    testBput(b, &h, 1);
   } else {
     unsigned char h[2] = {0xd9, (unsigned char)n};
-    bput(b, h, 2);
+    testBput(b, h, 2);
   }
-  bput(b, s, n);
+  testBput(b, s, n);
 }
 
 // pack {k0:v0, ...} from parallel arrays
-static void pkInput(Buf *b, const char *keys[], const char *vals[], int n) {
-  pkMap(b, (unsigned)n);
+static void testPkInput(Buf *b, const char *keys[], const char *vals[], int n) {
+  testPkMap(b, (unsigned)n);
   for (int i = 0; i < n; i++) {
-    pkStr(b, keys[i]);
-    pkStr(b, vals[i]);
+    testPkStr(b, keys[i]);
+    testPkStr(b, vals[i]);
   }
 }
 
@@ -175,17 +175,17 @@ typedef struct {
   const unsigned char *p, *end;
 } Cur;
 
-static void nfree(Node *nd) {
+static void testNfree(Node *nd) {
   if (!nd) return;
   free(nd->s);
-  for (unsigned long i = 0; i < nd->n; i++) nfree(nd->items[i]);
+  for (unsigned long i = 0; i < nd->n; i++) testNfree(nd->items[i]);
   free(nd->items);
   free(nd);
 }
 
 static Node *parse(Cur *c);
 
-static unsigned long long beU(Cur *c, int n) {
+static unsigned long long testBeU(Cur *c, int n) {
   unsigned long long v = 0;
   for (int i = 0; i < n; i++) v = (v << 8) | c->p[i];
   c->p += n;
@@ -199,35 +199,35 @@ static Node *parse(Cur *c) {
   if (!nd) return NULL;
   if ((b & 0xf0) == 0x80 || b == 0xde || b == 0xdf) {
     unsigned long n = (b & 0xf0) == 0x80 ? (unsigned)(b & 0x0f)
-                                         : b == 0xde ? (unsigned)beU(c, 2) : (unsigned)beU(c, 4);
+                                         : b == 0xde ? (unsigned)testBeU(c, 2) : (unsigned)testBeU(c, 4);
     nd->t = N_MAP;
     nd->n = n * 2;
     nd->items = calloc(nd->n ? nd->n : 1, sizeof *nd->items);
     for (unsigned long i = 0; i < nd->n; i++)
       if (!(nd->items[i] = parse(c))) {
-        nfree(nd);
+        testNfree(nd);
         return NULL;
       }
     return nd;
   }
   if ((b & 0xf0) == 0x90 || b == 0xdc || b == 0xdd) {
     unsigned long n = (b & 0xf0) == 0x90 ? (unsigned)(b & 0x0f)
-                                         : b == 0xdc ? (unsigned)beU(c, 2) : (unsigned)beU(c, 4);
+                                         : b == 0xdc ? (unsigned)testBeU(c, 2) : (unsigned)testBeU(c, 4);
     nd->t = N_ARR;
     nd->n = n;
     nd->items = calloc(n ? n : 1, sizeof *nd->items);
     for (unsigned long i = 0; i < n; i++)
       if (!(nd->items[i] = parse(c))) {
-        nfree(nd);
+        testNfree(nd);
         return NULL;
       }
     return nd;
   }
   if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda) {
     unsigned long n = (b & 0xe0) == 0xa0 ? (unsigned)(b & 0x1f)
-                                         : b == 0xd9 ? (unsigned)beU(c, 1) : (unsigned)beU(c, 2);
+                                         : b == 0xd9 ? (unsigned)testBeU(c, 1) : (unsigned)testBeU(c, 2);
     if (c->end - c->p < (long)n) {
-      nfree(nd);
+      testNfree(nd);
       return NULL;
     }
     nd->t = N_STR;
@@ -244,11 +244,11 @@ static Node *parse(Cur *c) {
   }
   if (b == 0xcf) {
     nd->t = N_UINT;
-    nd->u = beU(c, 8);
+    nd->u = testBeU(c, 8);
     return nd;
   }
   if (b == 0xcb) {
-    unsigned long long u = beU(c, 8);
+    unsigned long long u = testBeU(c, 8);
     nd->t = N_DBL;
     memcpy(&nd->d, &u, 8);
     return nd;
@@ -262,21 +262,21 @@ static Node *parse(Cur *c) {
     nd->u = b == 0xc3;
     return nd;
   }
-  nfree(nd);
+  testNfree(nd);
   return NULL;
 }
 
-static Node *mget(Node *map, const char *key) {
+static Node *testMget(Node *map, const char *key) {
   if (!map || map->t != N_MAP) return NULL;
   for (unsigned long i = 0; i < map->n; i += 2)
     if (map->items[i]->t == N_STR && !strcmp(map->items[i]->s, key)) return map->items[i + 1];
   return NULL;
 }
 
-static Node *findByTitle(Node *arr, const char *title) {
+static Node *testFindByTitle(Node *arr, const char *title) {
   if (!arr || arr->t != N_ARR) return NULL;
   for (unsigned long i = 0; i < arr->n; i++) {
-    Node *t = mget(arr->items[i], "title");
+    Node *t = testMget(arr->items[i], "title");
     if (t && t->t == N_STR && !strcmp(t->s, title)) return arr->items[i];
   }
   return NULL;
@@ -284,7 +284,7 @@ static Node *findByTitle(Node *arr, const char *title) {
 
 // ---- db peek (resulting state) -------------------------------------------
 
-static long dbCount(const char *sql) {
+static long testDbCount(const char *sql) {
   sqlite3 *db = NULL;
   if (sqlite3_open(g_db, &db)) return -1;
   sqlite3_stmt *st = NULL;
@@ -300,12 +300,12 @@ static long dbCount(const char *sql) {
 
 TEST authIsEnforced(void) {
   Resp r;
-  ASSERT_EQ(0, hreq("POST", "/ingest", 0, (unsigned char *)"x", 1, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 0, (unsigned char *)"x", 1, &r));
   ASSERT_EQ(401, r.status);
-  respFree(&r);
-  ASSERT_EQ(0, hreq("GET", "/events", 0, NULL, 0, &r));
+  testRespFree(&r);
+  ASSERT_EQ(0, testHreq("GET", "/events", 0, NULL, 0, &r));
   ASSERT_EQ(401, r.status);
-  respFree(&r);
+  testRespFree(&r);
   PASS();
 }
 
@@ -314,31 +314,31 @@ TEST notificationBecomesAppointment(void) {
   const char *k[] = {"source", "app", "title", "text", "time", "from", "ext_id"};
   const char *v[] = {"notif", "Gmail", "Dentist 2026-10-01T10:00", "confirming your visit",
                      "2026-09-30T09:00:00Z", "dentist@x.com", "t-appt-1"};
-  pkInput(&b, k, v, 7);
+  testPkInput(&b, k, v, 7);
   Resp r;
-  ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
   Node *m = parse(&c);
   ASSERT(m);
-  Node *ev = mget(m, "is_event");
+  Node *ev = testMget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 1);
-  nfree(m);
-  respFree(&r);
+  testNfree(m);
+  testRespFree(&r);
   free(b.p);
 
-  ASSERT_EQ(0, hreq("GET", "/events", 1, NULL, 0, &r));
+  ASSERT_EQ(0, testHreq("GET", "/events", 1, NULL, 0, &r));
   ASSERT_EQ(200, r.status);
   Cur c2 = {r.body, r.body + r.len};
   Node *arr = parse(&c2);
   ASSERT(arr && arr->t == N_ARR);
-  Node *found = findByTitle(arr, "Dentist 2026-10-01T10:00");
+  Node *found = testFindByTitle(arr, "Dentist 2026-10-01T10:00");
   ASSERT(found);
-  Node *kind = mget(found, "kind");
+  Node *kind = testMget(found, "kind");
   ASSERT(kind && kind->t == N_STR);
   ASSERT_STR_EQ("appointment", kind->s);
-  nfree(arr);
-  respFree(&r);
+  testNfree(arr);
+  testRespFree(&r);
   PASS();
 }
 
@@ -347,43 +347,43 @@ TEST emailBecomesObligation(void) {
   const char *k[] = {"source", "app", "title", "text", "time", "from", "ext_id"};
   const char *v[] = {"email", "billing@power.com", "Invoice due 2026-10-05", "please pay by Friday",
                      "2026-09-30T08:00:00Z", "billing@power.com", "t-oblg-1"};
-  pkInput(&b, k, v, 7);
+  testPkInput(&b, k, v, 7);
   Resp r;
-  ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
-  respFree(&r);
+  testRespFree(&r);
   free(b.p);
 
-  ASSERT_EQ(0, hreq("GET", "/events", 1, NULL, 0, &r));
+  ASSERT_EQ(0, testHreq("GET", "/events", 1, NULL, 0, &r));
   Cur c = {r.body, r.body + r.len};
   Node *arr = parse(&c);
-  Node *found = findByTitle(arr, "Invoice due 2026-10-05");
+  Node *found = testFindByTitle(arr, "Invoice due 2026-10-05");
   ASSERT(found);
-  ASSERT_STR_EQ("obligation", mget(found, "kind")->s);
-  nfree(arr);
-  respFree(&r);
+  ASSERT_STR_EQ("obligation", testMget(found, "kind")->s);
+  testNfree(arr);
+  testRespFree(&r);
   PASS();
 }
 
 TEST noiseIsKeptRawButNotAnEvent(void) {
-  long raws_before = dbCount("SELECT COUNT(*) FROM raw_inputs;");
-  long evs_before = dbCount("SELECT COUNT(*) FROM events;");
+  long raws_before = testDbCount("SELECT COUNT(*) FROM raw_inputs;");
+  long evs_before = testDbCount("SELECT COUNT(*) FROM events;");
   Buf b = {0};
   const char *k[] = {"title", "text", "ext_id"};
   const char *v[] = {"meme of the day", "haha look at this", "t-none-1"};
-  pkInput(&b, k, v, 3);
+  testPkInput(&b, k, v, 3);
   Resp r;
-  ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
   Node *m = parse(&c);
-  Node *ev = mget(m, "is_event");
+  Node *ev = testMget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 0);
-  nfree(m);
-  respFree(&r);
+  testNfree(m);
+  testRespFree(&r);
   free(b.p);
-  ASSERT_EQ(raws_before + 1, dbCount("SELECT COUNT(*) FROM raw_inputs;"));
-  ASSERT_EQ(evs_before, dbCount("SELECT COUNT(*) FROM events;"));
+  ASSERT_EQ(raws_before + 1, testDbCount("SELECT COUNT(*) FROM raw_inputs;"));
+  ASSERT_EQ(evs_before, testDbCount("SELECT COUNT(*) FROM events;"));
   PASS();
 }
 
@@ -391,23 +391,23 @@ TEST duplicateExtIdStoresOnce(void) {
   Buf b = {0};
   const char *k[] = {"source", "title", "text", "ext_id"};
   const char *v[] = {"notif", "Flight 2026-11-02T07:30", "boarding pass", "t-dup-1"};
-  pkInput(&b, k, v, 4);
+  testPkInput(&b, k, v, 4);
   Resp r1, r2;
-  ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r1));
-  ASSERT_EQ(0, hreq("POST", "/ingest", 1, b.p, (long)b.len, &r2));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r1));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r2));
   ASSERT_EQ(200, r1.status);
   ASSERT_EQ(200, r2.status);
   Cur c1 = {r1.body, r1.body + r1.len}, c2 = {r2.body, r2.body + r2.len};
   Node *m1 = parse(&c1), *m2 = parse(&c2);
   ASSERT(m1 && m2);
-  ASSERT_EQ(mget(m1, "raw_id")->u, mget(m2, "raw_id")->u);
-  nfree(m1);
-  nfree(m2);
-  respFree(&r1);
-  respFree(&r2);
+  ASSERT_EQ(testMget(m1, "raw_id")->u, testMget(m2, "raw_id")->u);
+  testNfree(m1);
+  testNfree(m2);
+  testRespFree(&r1);
+  testRespFree(&r2);
   free(b.p);
-  ASSERT_EQ(1, dbCount("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
-  ASSERT_EQ(1, dbCount("SELECT COUNT(*) FROM events WHERE raw_id="
+  ASSERT_EQ(1, testDbCount("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
+  ASSERT_EQ(1, testDbCount("SELECT COUNT(*) FROM events WHERE raw_id="
                         "(SELECT id FROM raw_inputs WHERE ext_id='t-dup-1');"));
   PASS();
 }
@@ -416,12 +416,12 @@ TEST duplicateExtIdStoresOnce(void) {
 
 GREATEST_MAIN_DEFS();
 
-static int waitHealthy(void) {
+static int testWaitHealthy(void) {
   for (int i = 0; i < 50; i++) {
     Resp r;
-    if (!hreq("GET", "/health", 0, NULL, 0, &r)) {
+    if (!testHreq("GET", "/health", 0, NULL, 0, &r)) {
       int ok = r.status == 200;
-      respFree(&r);
+      testRespFree(&r);
       if (ok) return 0;
     }
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 100000000};
@@ -465,7 +465,7 @@ int main(int argc, char **argv) {
     execl("./genda", "genda", (char *)NULL);
     _exit(127);
   }
-  int came_up = !waitHealthy() && kill(g_child, 0) == 0;
+  int came_up = !testWaitHealthy() && kill(g_child, 0) == 0;
   if (came_up) {
     RUN_TEST(authIsEnforced);
     RUN_TEST(notificationBecomesAppointment);
