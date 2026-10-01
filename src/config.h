@@ -11,7 +11,7 @@ extern char g_db_path[1024];
 extern char g_token[256];
 extern sqlite3 *g_db;
 
-void configLog(const char *fmt, ...);
+__attribute__((format(printf, 1, 2))) void configLog(const char *fmt, ...);
 const char *configEnv(const char *k, const char *dflt);
 
 #endif
