@@ -9,7 +9,12 @@ void mpReserve(MpWriter *w, size_t extra) {
   if (w->len + extra <= w->cap) return;
   size_t ncap = w->cap ? w->cap * 2 : 256;
   while (ncap < w->len + extra) ncap *= 2;
-  w->p = realloc(w->p, ncap);
+  unsigned char *np = realloc(w->p, ncap);
+  if (!np) { // no recovery path for a half-written message
+    fputs("msgpack: out of memory\n", stderr);
+    abort();
+  }
+  w->p = np;
   w->cap = ncap;
 }
 
