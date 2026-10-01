@@ -35,7 +35,7 @@ imap_test: test/integration/imap_test.c src/imap.o src/db.o src/classify.o src/m
 	$(CC) $(CFLAGS) -o test/integration/imap_test test/integration/imap_test.c src/imap.o src/db.o src/classify.o src/msgpack.o src/config.o $(LDLIBS)
 
 server_test: test/integration/server_test.c
-	$(CC) $(CFLAGS) -o test/integration/server_test test/integration/server_test.c $(LDLIBS)
+	$(CC) $(CFLAGS) -DGENDA_BIN=\"$(CURDIR)/genda\" -o test/integration/server_test test/integration/server_test.c $(LDLIBS)
 
 clean:
 	rm -f genda test/integration/*_test src/*.o

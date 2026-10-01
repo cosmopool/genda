@@ -1,5 +1,5 @@
-// Integration tests: real ./genda binary + temp sqlite, exercised over HTTP.
-// Asserts on wire behavior (msgpack) and resulting db state.
+// Integration tests: real genda binary + temp sqlite, exercised over HTTP.
+// Asserts on wire behavior (msgpack): events only via GET /events.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -286,8 +286,29 @@ static Node *testFindByTitle(Node *arr, const char *title) {
   return NULL;
 }
 
+// GET /events and count events with exactly this title. -1 on error.
+static long testEventsTitled(const char *title) {
+  Resp r;
+  long n = -1;
+  if (!testHreq("GET", "/events", 1, NULL, 0, &r) && r.status == 200) {
+    Cur c = {r.body, r.body + r.len};
+    Node *arr = parse(&c);
+    if (arr && arr->t == N_ARR) {
+      n = 0;
+      for (unsigned long i = 0; i < arr->n; i++) {
+        Node *t = testMget(arr->items[i], "title");
+        if (t && t->t == N_STR && !strcmp(t->s, title)) n++;
+      }
+    }
+    testNfree(arr);
+  }
+  testRespFree(&r);
+  return n;
+}
+
 // ---- db peek (resulting state) -------------------------------------------
 
+// raw_inputs has no API; its schema is a contract (AGENTS.md), so peek it.
 static long testDbCount(const char *sql) {
   sqlite3 *db = NULL;
   if (sqlite3_open(g_db, &db)) return -1;
@@ -371,7 +392,6 @@ TEST emailBecomesObligation(void) {
 
 TEST noiseIsKeptRawButNotAnEvent(void) {
   long raws_before = testDbCount("SELECT COUNT(*) FROM raw_inputs;");
-  long evs_before = testDbCount("SELECT COUNT(*) FROM events;");
   Buf b = {0};
   const char *k[] = {"title", "text", "ext_id"};
   const char *v[] = {"meme of the day", "haha look at this", "t-none-1"};
@@ -387,7 +407,7 @@ TEST noiseIsKeptRawButNotAnEvent(void) {
   testRespFree(&r);
   free(b.p);
   ASSERT_EQ(raws_before + 1, testDbCount("SELECT COUNT(*) FROM raw_inputs;"));
-  ASSERT_EQ(evs_before, testDbCount("SELECT COUNT(*) FROM events;"));
+  ASSERT_EQ(0, testEventsTitled("meme of the day"));
   PASS();
 }
 
@@ -411,8 +431,7 @@ TEST duplicateExtIdStoresOnce(void) {
   testRespFree(&r2);
   free(b.p);
   ASSERT_EQ(1, testDbCount("SELECT COUNT(*) FROM raw_inputs WHERE ext_id='t-dup-1';"));
-  ASSERT_EQ(1, testDbCount("SELECT COUNT(*) FROM events WHERE raw_id="
-                        "(SELECT id FROM raw_inputs WHERE ext_id='t-dup-1');"));
+  ASSERT_EQ(1, testEventsTitled("Flight 2026-11-02T07:30"));
   PASS();
 }
 
@@ -483,10 +502,15 @@ int main(int argc, char **argv) {
     setenv("GENDA_DB", g_db, 1);
     setenv("GENDA_TOKEN", TOKEN, 1);
     unsetenv("GENDA_IMAP_URL"); // dev shell may have one: never poll real mail
-    execl("./genda", "genda", (char *)NULL);
+    execl(GENDA_BIN, "genda", (char *)NULL);
     _exit(127);
   }
-  int came_up = !testWaitHealthy() && kill(g_child, 0) == 0;
+  int healthy = !testWaitHealthy();
+  // Port race: if our child died (e.g. bind failed), a foreign server may be
+  // what answered /health. kill(pid, 0) can't tell: zombies count as alive.
+  int alive = g_child > 0 && waitpid(g_child, NULL, WNOHANG) == 0;
+  if (!alive) g_child = -1; // reaped or never forked: never signal a recycled pid
+  int came_up = healthy && alive;
   if (came_up) {
     RUN_TEST(authIsEnforced);
     RUN_TEST(notificationBecomesAppointment);
@@ -494,6 +518,8 @@ int main(int argc, char **argv) {
     RUN_TEST(noiseIsKeptRawButNotAnEvent);
     RUN_TEST(duplicateExtIdStoresOnce);
     RUN_TEST(malformedRequestIs400);
+  } else if (healthy) {
+    fprintf(stderr, "genda exited, yet port %d answered /health: port taken?\n", test_port);
   } else {
     fprintf(stderr, "server did not come up\n");
   }

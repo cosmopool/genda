@@ -33,44 +33,28 @@ static int fillInput(Input *in, const char *ext, const char *title, const char *
   return rc;
 }
 
-static long feedCount(const char *since, const char *until) {
+// Events in range; with title != "" only those with exactly that title.
+// -1 on error.
+static long feedCount(const char *since, const char *until, const char *title) {
   MpWriter w = {0};
   if (dbPackEvents(since, until, &w)) return -1;
   MpReader r = {w.p, w.p + w.len};
   long n = mpHdrLen(&r, 0x90, 0xdc, 0xdd);
-  free(w.p);
-  return n;
-}
-
-// 1 if any event in range has this title, 0 if not, -1 on error.
-static int feedHas(const char *since, const char *until, const char *t) {
-  MpWriter w = {0};
-  if (dbPackEvents(since, until, &w)) return -1;
-  MpReader r = {w.p, w.p + w.len};
-  long n = mpHdrLen(&r, 0x90, 0xdc, 0xdd);
-  int found = 0;
-  for (long i = 0; i < n && !found; i++) {
+  int bad = n < 0;
+  long count = 0;
+  for (long i = 0; i < n && !bad; i++) {
     long m = mpHdrLen(&r, 0x80, 0xde, 0xdf);
-    if (m < 0) {
-      free(w.p);
-      return -1;
+    bad = m < 0;
+    int match = !title[0];
+    for (long j = 0; j < m && !bad; j++) {
+      char k[32], v[512]; // every event value is a scalar
+      bad = mpStrval(&r, k, sizeof k) || mpStrval(&r, v, sizeof v);
+      if (!bad && !strcmp(k, "title") && !strcmp(v, title)) match = 1;
     }
-    for (long j = 0; j < m; j++) {
-      char k[32], v[512];
-      if (mpStrval(&r, k, sizeof k)) {
-        free(w.p);
-        return -1;
-      }
-      if (!strcmp(k, "title")) {
-        found = !mpStrval(&r, v, sizeof v) && !strcmp(v, t);
-      } else if (mpSkip(&r)) {
-        free(w.p);
-        return -1;
-      }
-    }
+    count += match;
   }
   free(w.p);
-  return found;
+  return bad ? -1 : count;
 }
 
 // Titles without event keywords keep these raw-only: no events rows.
@@ -98,37 +82,42 @@ TEST derivesMissingExtId(void) {
 }
 
 TEST storesAndFiltersEvents(void) {
+  const char *mid = "2026-10-15T00:00:00Z";
+  long all = feedCount("", "", ""), late = feedCount(mid, "", ""), early = feedCount("", mid, "");
   Input in;
   ASSERT_EQ(0, fillInput(&in, "db-ev-a", "Dentist 2026-10-01T10:00", "confirming"));
   ASSERT(dbIngest(&in).is_event);
   ASSERT_EQ(0, fillInput(&in, "db-ev-b", "Dentist 2026-11-01T10:00", "confirming"));
   ASSERT(dbIngest(&in).is_event);
-  ASSERT_EQ(2, feedCount("", ""));
-  ASSERT_EQ(1, feedCount("2026-10-15T00:00:00Z", ""));
-  ASSERT_EQ(1, feedCount("", "2026-10-15T00:00:00Z"));
-  ASSERT_EQ(1, feedHas("", "", "Dentist 2026-10-01T10:00"));
-  ASSERT_EQ(1, feedHas("2026-10-15T00:00:00Z", "", "Dentist 2026-11-01T10:00"));
-  ASSERT_EQ(0, feedHas("2026-10-15T00:00:00Z", "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(all + 2, feedCount("", "", ""));
+  ASSERT_EQ(late + 1, feedCount(mid, "", ""));
+  ASSERT_EQ(early + 1, feedCount("", mid, ""));
+  ASSERT_EQ(1, feedCount("", "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(1, feedCount(mid, "", "Dentist 2026-11-01T10:00"));
+  ASSERT_EQ(0, feedCount(mid, "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(0, feedCount("", mid, "Dentist 2026-11-01T10:00"));
   PASS();
 }
 
 TEST ingestTwiceStoresOneEvent(void) {
   Input in;
   ASSERT_EQ(0, fillInput(&in, "db-ev-twice", "Dentist twice", "confirming"));
-  long before = feedCount("", "");
+  long before = feedCount("", "", "");
   Ingest first = dbIngest(&in);
   Ingest again = dbIngest(&in); // e.g. same mail seen by IMAP again
   ASSERT(first.id.v > 0);
   ASSERT_EQ(first.id.v, again.id.v);
   ASSERT(first.is_event && again.is_event);
-  ASSERT_EQ(before + 1, feedCount("", ""));
+  ASSERT_EQ(before + 1, feedCount("", "", ""));
+  ASSERT_EQ(1, feedCount("", "", "Dentist twice"));
   PASS();
 }
 
 TEST metaRoundTrip(void) {
-  ASSERT_EQ(0, dbMetaUid().v);
   dbMetaUidSet((ImapUid){42});
   ASSERT_EQ(42, dbMetaUid().v);
+  dbMetaUidSet((ImapUid){7}); // overwrites, even downward
+  ASSERT_EQ(7, dbMetaUid().v);
   PASS();
 }
 
