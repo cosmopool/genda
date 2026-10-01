@@ -4,6 +4,7 @@
 
 #include "classify.h"
 #include "common.h"
+#include "config.h"
 #include "db.h"
 
 #include <curl/curl.h>
@@ -79,7 +80,7 @@ static void imapHdrField(const char *hdrs, const char *name, char *out, size_t c
 static void imapPollOnce(const char *url, const char *user, const char *pass) {
   CurlBuf s = {0};
   if (imapCmd(url, user, pass, "UID SEARCH UNSEEN", &s)) {
-    mainLog("imap search failed");
+    configLog("imap search failed");
     free(s.p);
     return;
   }
@@ -129,7 +130,7 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
       max = uid;
       dbMetaUidSet(max);
     }
-    mainLog("imap stored uid=%ld raw=%lld", uid, id);
+    configLog("imap stored uid=%ld raw=%lld", uid, id);
   }
   free(s.p);
 }
@@ -138,11 +139,11 @@ void *imapThread(void *arg) {
   (void)arg;
   const char *url = getenv("GENDA_IMAP_URL");
   if (!url || !*url) return NULL; // not configured: no-op
-  const char *user = mainEnv("GENDA_IMAP_USER", "");
-  const char *pass = mainEnv("GENDA_IMAP_PASS", "");
-  long every = atol(mainEnv("GENDA_IMAP_POLL_SEC", "300"));
+  const char *user = configEnv("GENDA_IMAP_USER", "");
+  const char *pass = configEnv("GENDA_IMAP_PASS", "");
+  long every = atol(configEnv("GENDA_IMAP_POLL_SEC", "300"));
   if (every < 60) every = 60;
-  mainLog("imap polling %s every %lds", url, every);
+  configLog("imap polling %s every %lds", url, every);
   for (;;) {
     sleep((unsigned)every);
     imapPollOnce(url, user, pass);

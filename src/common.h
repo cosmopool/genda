@@ -1,8 +1,6 @@
-// Shared types and process-wide state (defined in main.c).
+// Shared domain types.
 #ifndef GENDA_COMMON_H
 #define GENDA_COMMON_H
-
-#include <sqlite3.h>
 
 // Normalized input for both Android notifications and email.
 typedef struct {
@@ -14,14 +12,5 @@ typedef struct {
   char title[512], starts_at[64], deadline[64], location[256], kind[16];
   double confidence;
 } Classified;
-
-// Process config + db handle.
-extern int g_port;
-extern char g_db_path[1024];
-extern char g_token[256];
-extern sqlite3 *g_db;
-
-void mainLog(const char *fmt, ...);
-const char *mainEnv(const char *k, const char *dflt);
 
 #endif

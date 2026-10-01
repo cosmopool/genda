@@ -2,6 +2,7 @@
 #include "db.h"
 
 #include "common.h"
+#include "config.h"
 #include "msgpack.h"
 
 #include <stdio.h>
@@ -18,7 +19,7 @@ void dbUtcNow(char *out, size_t n) {
 
 int dbOpen(void) {
   if (sqlite3_open(g_db_path, &g_db)) {
-    mainLog("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
+    configLog("sqlite open %s: %s", g_db_path, sqlite3_errmsg(g_db));
     return -1;
   }
   const char *schema = "CREATE TABLE IF NOT EXISTS raw_inputs("
@@ -30,7 +31,7 @@ int dbOpen(void) {
                        "CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY,v TEXT);";
   char *err = NULL;
   if (sqlite3_exec(g_db, schema, NULL, NULL, &err)) {
-    mainLog("schema: %s", err ? err : "?");
+    configLog("schema: %s", err ? err : "?");
     sqlite3_free(err);
     return -1;
   }

@@ -4,6 +4,7 @@
 
 #include "classify.h"
 #include "common.h"
+#include "config.h"
 #include "db.h"
 #include "msgpack.h"
 
@@ -255,7 +256,7 @@ int serverRun(void) {
     perror("listen");
     return 1;
   }
-  mainLog("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
+  configLog("listening on 127.0.0.1:%d db=%s", g_port, g_db_path);
   for (;;) {
     int fd = accept(srv, NULL, NULL);
     if (fd < 0) continue;
