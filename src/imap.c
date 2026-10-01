@@ -63,11 +63,16 @@ static void imapHdrField(const char *hdrs, const char *name, char *out, size_t c
       while (*v == ' ' || *v == '\t') v++;
       size_t o = 0;
       for (; *v && *v != '\r' && *v != '\n' && o + 1 < cap; v++) out[o++] = *v;
-      while (*v == '\r' || *v == '\n') { // unfolded continuation
-        if ((v[1] != ' ' && v[1] != '\t') || o + 1 >= cap) break;
+      for (;;) { // unfold: line break (CRLF or LF) followed by SP/HTAB
+        const char *nl = v;
+        if (*nl == '\r') nl++;
+        if (*nl != '\n') break;
+        nl++;
+        if ((*nl != ' ' && *nl != '\t') || o + 1 >= cap) break;
         out[o++] = ' ';
-        v += 2;
-        while (*v && *v != '\r' && *v != '\n' && o + 1 < cap) out[o++] = *v++;
+        v = nl;
+        while (*v == ' ' || *v == '\t') v++;
+        for (; *v && *v != '\r' && *v != '\n' && o + 1 < cap; v++) out[o++] = *v;
       }
       out[o] = 0;
       return;
