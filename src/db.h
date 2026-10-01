@@ -9,7 +9,8 @@ int dbOpen(void);
 void dbUtcNow(char *out, size_t n);
 // Parse msgpack map body into Input. Unknown keys skipped. Returns 0 ok.
 int dbParseInput(const unsigned char *body, long len, Input *in);
-// Store raw input, dedupe by ext_id. Returns raw_id (>0) or -1 on error.
+// Store raw input, dedupe by ext_id (derived by hash when empty).
+// Returns raw_id (>0) or -1 on error.
 long long dbStoreRaw(const Input *in);
 int dbStoreEvent(long long raw_id, const Classified *c);
 // Pack all events in range as msgpack array. since/until "" = unbounded.

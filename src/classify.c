@@ -24,6 +24,9 @@ static int classifyContainsAny(const char *hay, const char *words[]) {
 // First YYYY-MM-DD([T ]HH:MM) occurrence -> out. Returns 1 found.
 static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
   for (; *s; s++) {
+    // sscanf skips leading whitespace, which would shift the s[10]/s+11
+    // offsets below — only match where the date literally starts.
+    if (!isdigit((unsigned char)*s)) continue;
     int Y, M, D, h = -1, m = -1;
     if (sscanf(s, "%4d-%2d-%2d", &Y, &M, &D) == 3 && Y >= 2020 && Y <= 2100 && M >= 1 &&
         M <= 12 && D >= 1 && D <= 31) {

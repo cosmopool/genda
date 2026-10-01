@@ -12,13 +12,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "vendor/greatest.h"
+#include "../vendor/greatest.h"
 
 #define TOKEN "t-secret"
 
 static char g_db[256] = "";
 static pid_t g_child = -1;
-static int g_port = 0;
+static int test_port = 0;
 
 // ---- tiny http client (test side) ---------------------------------------
 
@@ -41,7 +41,7 @@ static int testHreq(const char *method, const char *path, int auth, const unsign
   struct timeval tv = {.tv_sec = 5};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)g_port)};
+  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)test_port)};
   a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (connect(fd, (struct sockaddr *)&a, sizeof a)) {
     close(fd);
@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "no free port\n");
       return 1;
     }
-    g_port = ntohs(a.sin_port);
+    test_port = ntohs(a.sin_port);
     close(probe);
   }
   char tmpl[] = "/tmp/genda-test-XXXXXX.db";
@@ -458,7 +458,7 @@ int main(int argc, char **argv) {
   g_child = fork();
   if (g_child == 0) {
     char port[16];
-    snprintf(port, sizeof port, "%d", g_port);
+    snprintf(port, sizeof port, "%d", test_port);
     setenv("GENDA_PORT", port, 1);
     setenv("GENDA_DB", g_db, 1);
     setenv("GENDA_TOKEN", TOKEN, 1);

@@ -1,5 +1,5 @@
 genda
-test_integration
+*_test
 *.o
 *.db
 *.db-journal

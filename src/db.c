@@ -85,21 +85,26 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
     }
     free(k);
   }
-  if (!in->ext_id[0]) dbDjbHex(in->source, in->title, in->text, in->ext_id, sizeof in->ext_id);
   return 0;
 }
 
-// Store raw input, dedupe by ext_id. Returns raw_id (>0) or -1 on error.
+// Store raw input, dedupe by ext_id (derived by hash when empty).
+// Returns raw_id (>0) or -1 on error.
 long long dbStoreRaw(const Input *in) {
   char now[32];
   dbUtcNow(now, sizeof now);
+  char ext[128];
+  if (in->ext_id[0])
+    snprintf(ext, sizeof ext, "%s", in->ext_id);
+  else
+    dbDjbHex(in->source, in->title, in->text, ext, sizeof ext);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT OR IGNORE INTO raw_inputs"
                     "(source,ext_id,app,title,text,from_addr,received_at)"
                     " VALUES(?,?,?,?,?,?,?);";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
   sqlite3_bind_text(st, 1, in->source, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 2, in->ext_id, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, ext, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 3, in->app, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 4, in->title, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 5, in->text, -1, SQLITE_TRANSIENT);
@@ -111,7 +116,7 @@ long long dbStoreRaw(const Input *in) {
   st = NULL;
   if (sqlite3_prepare_v2(g_db, "SELECT id FROM raw_inputs WHERE ext_id=?;", -1, &st, NULL))
     return -1;
-  sqlite3_bind_text(st, 1, in->ext_id, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 1, ext, -1, SQLITE_TRANSIENT);
   long long id = -1;
   if (sqlite3_step(st) == SQLITE_ROW) id = sqlite3_column_int64(st, 0);
   sqlite3_finalize(st);

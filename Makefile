@@ -17,13 +17,27 @@ genda: $(OBJS)
 
 $(OBJS): $(HDRS)
 
-test: genda test_integration
-	./test_integration
+test: genda msgpack_test db_test classify_test imap_test server_test
+	./test/integration/msgpack_test && ./test/integration/db_test && \
+	./test/integration/classify_test && ./test/integration/imap_test && \
+	./test/integration/server_test
 
-test_integration: test/test_integration.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+msgpack_test: test/integration/msgpack_test.c src/msgpack.o
+	$(CC) $(CFLAGS) -o test/integration/msgpack_test test/integration/msgpack_test.c src/msgpack.o
+
+db_test: test/integration/db_test.c src/db.o src/msgpack.o src/config.o
+	$(CC) $(CFLAGS) -o test/integration/db_test test/integration/db_test.c src/db.o src/msgpack.o src/config.o $(LDLIBS)
+
+classify_test: test/integration/classify_test.c src/classify.o
+	$(CC) $(CFLAGS) -o test/integration/classify_test test/integration/classify_test.c src/classify.o
+
+imap_test: test/integration/imap_test.c src/imap.o src/db.o src/classify.o src/msgpack.o src/config.o
+	$(CC) $(CFLAGS) -o test/integration/imap_test test/integration/imap_test.c src/imap.o src/db.o src/classify.o src/msgpack.o src/config.o $(LDLIBS)
+
+server_test: test/integration/server_test.c
+	$(CC) $(CFLAGS) -o test/integration/server_test test/integration/server_test.c $(LDLIBS)
 
 clean:
-	rm -f genda test_integration src/*.o
+	rm -f genda test/integration/*_test src/*.o
 
 .PHONY: all test clean
