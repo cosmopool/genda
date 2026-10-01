@@ -86,7 +86,8 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
   }
   if (!s.p) return; // empty response; glibc strtok_r derefs a NULL save
   long last = dbMetaUid(), max = last;
-  // response holds "* SEARCH 12 13 ..." possibly across lines
+  // response holds "* SEARCH 12 13 ..." possibly across lines, uids ascending.
+  // Stop at the first failure so the next poll retries from that uid.
   char *save = NULL;
   for (char *tok = strtok_r(s.p, " \r\n", &save); tok; tok = strtok_r(NULL, " \r\n", &save)) {
     if (tok[0] < '0' || tok[0] > '9') continue;
@@ -97,15 +98,17 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
              uid);
     CurlBuf h = {0};
     if (imapCmd(url, user, pass, cmd, &h)) {
+      configLog("imap fetch header failed uid=%ld", uid);
       free(h.p);
-      continue;
+      break;
     }
     snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid);
     CurlBuf t = {0};
     if (imapCmd(url, user, pass, fetch, &t)) {
+      configLog("imap fetch text failed uid=%ld", uid);
       free(h.p);
       free(t.p);
-      continue;
+      break;
     }
     Input in;
     memset(&in, 0, sizeof in);
@@ -123,10 +126,16 @@ static void imapPollOnce(const char *url, const char *user, const char *pass) {
     free(h.p);
     free(t.p);
     long long id = dbStoreRaw(&in);
-    if (id > 0) {
-      Classified c;
-      classifyInput(&in, &c);
-      if (c.confidence >= 0.3 && strcmp(c.kind, "none")) dbStoreEvent(id, &c);
+    if (id <= 0) {
+      configLog("imap store raw failed uid=%ld", uid);
+      break;
+    }
+    Classified c;
+    classifyInput(&in, &c);
+    int is_event = c.confidence >= 0.3 && strcmp(c.kind, "none");
+    if (is_event && dbStoreEvent(id, &c)) {
+      configLog("imap store event failed uid=%ld", uid);
+      break;
     }
     if (uid > max) {
       max = uid;
