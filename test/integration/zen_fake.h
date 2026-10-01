@@ -205,6 +205,7 @@ static inline int zenFakeStart(void) {
   snprintf(url, sizeof url, "http://127.0.0.1:%d/zen/v1/systemone", ntohs(a.sin_port));
   setenv("GENDA_ZEN_URL", url, 1);
   setenv("OPENCODE_API_KEY", "test-key", 1);
+  unsetenv("GENDA_ZEN_MODEL"); // dev shell may pin one: tests expect the default
   setenv("no_proxy", "*", 1); // a dev shell proxy must not see test traffic
   return 0;
 }
