@@ -123,13 +123,15 @@ long long dbStoreRaw(const Input *in) {
   return id;
 }
 
+// Idempotent: a raw_id that already has an event is left alone. Returns 0 ok.
 int dbStoreEvent(long long raw_id, const Classified *c) {
   char now[32];
   dbUtcNow(now, sizeof now);
   sqlite3_stmt *st = NULL;
   const char *sql = "INSERT INTO events"
                     "(raw_id,title,starts_at,deadline,location,kind,confidence,created_at)"
-                    " VALUES(?,?,?,?,?,?,?,?);";
+                    " SELECT ?1,?2,?3,?4,?5,?6,?7,?8"
+                    " WHERE NOT EXISTS (SELECT 1 FROM events WHERE raw_id=?1);";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
   sqlite3_bind_int64(st, 1, raw_id);
   sqlite3_bind_text(st, 2, c->title, -1, SQLITE_TRANSIENT);

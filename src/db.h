@@ -12,6 +12,7 @@ int dbParseInput(const unsigned char *body, long len, Input *in);
 // Store raw input, dedupe by ext_id (derived by hash when empty).
 // Returns raw_id (>0) or -1 on error.
 long long dbStoreRaw(const Input *in);
+// Idempotent: a raw_id that already has an event is left alone. Returns 0 ok.
 int dbStoreEvent(long long raw_id, const Classified *c);
 // Pack all events in range as msgpack array. since/until "" = unbounded.
 int dbPackEvents(const char *since, const char *until, MpWriter *w);

@@ -121,6 +121,23 @@ TEST storesAndFiltersEvents(void) {
   PASS();
 }
 
+TEST storeEventIsIdempotent(void) {
+  Input in;
+  fillInput(&in, "db-ev-twice");
+  long long raw = dbStoreRaw(&in);
+  ASSERT(raw > 0);
+  Classified c;
+  memset(&c, 0, sizeof c);
+  snprintf(c.title, sizeof c.title, "Twice stored visit");
+  snprintf(c.kind, sizeof c.kind, "appointment");
+  c.confidence = 0.9;
+  long before = feedCount("", "");
+  ASSERT_EQ(0, dbStoreEvent(raw, &c));
+  ASSERT_EQ(0, dbStoreEvent(raw, &c)); // e.g. same mail seen by IMAP again
+  ASSERT_EQ(before + 1, feedCount("", ""));
+  PASS();
+}
+
 TEST metaRoundTrip(void) {
   ASSERT_EQ(0, dbMetaUid());
   dbMetaUidSet(42);
@@ -148,6 +165,7 @@ int main(int argc, char **argv) {
   RUN_TEST(storesAndDedupesRaw);
   RUN_TEST(derivesMissingExtId);
   RUN_TEST(storesAndFiltersEvents);
+  RUN_TEST(storeEventIsIdempotent);
   RUN_TEST(metaRoundTrip);
   GREATEST_MAIN_END();
   sqlite3_close(g_db);
