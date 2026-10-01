@@ -8,7 +8,7 @@ LDLIBS = -lsqlite3 -lcurl -lpthread
 
 SRCS = src/main.c src/server.c src/msgpack.c src/db.c src/classify.c src/imap.c src/config.c
 OBJS = $(SRCS:.c=.o)
-HDRS = src/common.h src/config.h src/server.h src/msgpack.h src/db.h src/classify.h src/imap.h
+HDRS = src/core.h src/common.h src/config.h src/server.h src/msgpack.h src/db.h src/classify.h src/imap.h
 
 all: genda
 
