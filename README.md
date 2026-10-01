@@ -25,6 +25,9 @@ Deps: system `sqlite3` + `libcurl` + `pthread`. Vendored headers:
 OPENCODE_API_KEY=... GENDA_PORT=8080 GENDA_DB=./genda.db GENDA_TOKEN=secret ./genda
 ```
 
+Or from a file: `cp .env.template .env`, fill it in, then
+`set -a; . ./.env; set +a; ./genda` (`.env` is gitignored).
+
 Listens on loopback; put Caddy/Tailscale in front for TLS.
 
 | Env                 | Default      | Purpose                                  |
