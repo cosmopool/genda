@@ -103,7 +103,7 @@ static void imapPollOnce(CURL *ch, CurlBuf *s, CurlBuf *h, CurlBuf *t) {
     if (tok[0] < '0' || tok[0] > '9') continue;
     ImapUid uid = {atol(tok)};
     if (uid.v <= last.v) continue;
-    char cmd[64], fetch[64];
+    char cmd[128], fetch[64];
     snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
              uid.v);
     if (imapCmd(ch, cmd, h)) break;
