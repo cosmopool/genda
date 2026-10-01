@@ -462,6 +462,7 @@ int main(int argc, char **argv) {
     setenv("GENDA_PORT", port, 1);
     setenv("GENDA_DB", g_db, 1);
     setenv("GENDA_TOKEN", TOKEN, 1);
+    unsetenv("GENDA_IMAP_URL"); // dev shell may have one: never poll real mail
     execl("./genda", "genda", (char *)NULL);
     _exit(127);
   }

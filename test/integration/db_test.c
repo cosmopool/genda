@@ -159,6 +159,8 @@ int main(int argc, char **argv) {
   snprintf(g_db_path, sizeof g_db_path, "%s", tmpl);
   if (dbOpen()) {
     fprintf(stderr, "db setup failed\n");
+    sqlite3_close(g_db);
+    unlink(tmpl);
     return 1;
   }
   snprintf(tDb, sizeof tDb, "%s", tmpl);
@@ -167,10 +169,9 @@ int main(int argc, char **argv) {
   RUN_TEST(storesAndFiltersEvents);
   RUN_TEST(storeEventIsIdempotent);
   RUN_TEST(metaRoundTrip);
-  GREATEST_MAIN_END();
   sqlite3_close(g_db);
   unlink(tDb);
-  return 0;
+  GREATEST_MAIN_END();
   (void)argc;
   (void)argv;
 }
