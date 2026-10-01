@@ -3,7 +3,7 @@
 Personal agenda server: classifies emails + phone notifications into
 calendar events. Never miss an appointment or obligation.
 
-Small C modules (`main/server/db/classify/imap/msgpack`), SQLite,
+Small C modules under `src/` (`main/server/db/classify/imap/msgpack`), SQLite,
 MessagePack wire format. No JSON on the wire.
 
 ## Build & test

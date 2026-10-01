@@ -6,9 +6,9 @@ CFLAGS += -isysroot $(XCRUN_SDK)
 endif
 LDLIBS = -lsqlite3 -lcurl -lpthread
 
-SRCS = main.c server.c msgpack.c db.c classify.c imap.c
+SRCS = src/main.c src/server.c src/msgpack.c src/db.c src/classify.c src/imap.c
 OBJS = $(SRCS:.c=.o)
-HDRS = common.h server.h msgpack.h db.h classify.h imap.h
+HDRS = src/common.h src/server.h src/msgpack.h src/db.h src/classify.h src/imap.h
 
 all: genda
 
@@ -20,10 +20,10 @@ $(OBJS): $(HDRS)
 test: genda test_integration
 	./test_integration
 
-test_integration: test_integration.c
+test_integration: src/test_integration.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 clean:
-	rm -f genda test_integration *.o
+	rm -f genda test_integration src/*.o
 
 .PHONY: all test clean
