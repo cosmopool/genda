@@ -24,7 +24,10 @@ static void mpB(MpWriter *w, unsigned char b) {
 }
 
 void mpMap(MpWriter *w, unsigned long n) {
-  if (n < 16) return mpB(w, (unsigned char)(0x80 | n));
+  if (n < 16) {
+    mpB(w, (unsigned char)(0x80 | n));
+    return;
+  }
   mpReserve(w, 3);
   w->p[w->len++] = 0xde;
   w->p[w->len++] = (unsigned char)(n >> 8);
@@ -32,7 +35,10 @@ void mpMap(MpWriter *w, unsigned long n) {
 }
 
 void mpArr(MpWriter *w, unsigned long n) {
-  if (n < 16) return mpB(w, (unsigned char)(0x90 | n));
+  if (n < 16) {
+    mpB(w, (unsigned char)(0x90 | n));
+    return;
+  }
   mpReserve(w, 3);
   w->p[w->len++] = 0xdc;
   w->p[w->len++] = (unsigned char)(n >> 8);
@@ -59,7 +65,10 @@ void mpStr(MpWriter *w, const char *s) {
 }
 
 void mpU64(MpWriter *w, unsigned long long v) {
-  if (v < 128) return mpB(w, (unsigned char)v);
+  if (v < 128) {
+    mpB(w, (unsigned char)v);
+    return;
+  }
   mpReserve(w, 9);
   w->p[w->len++] = 0xcf;
   for (int i = 7; i >= 0; i--) w->p[w->len++] = (unsigned char)(v >> (i * 8));
@@ -122,8 +131,10 @@ int mpSkip(MpReader *r) {
   if ((b & 0xf0) == 0x80) { // fixmap
     long n = b & 0x0f;
     r->p++;
-    for (long i = 0; i < n; i++)
-      if (mpSkip(r) || mpSkip(r)) return -1;
+    for (long i = 0; i < n; i++) {
+      if (mpSkip(r)) return -1; // key
+      if (mpSkip(r)) return -1; // value
+    }
     return 0;
   }
   if ((b & 0xf0) == 0x90) { // fixarray
@@ -179,24 +190,38 @@ int mpSkip(MpReader *r) {
   }
   case 0xdc:
   case 0xdd: {
-    MpReader t = *r;
-    t.p--;
-    long n = mpHdrLen(&t, 0, 0xdc, 0xdd);
-    if (n < 0) return -1;
-    *r = t;
+    // array16/32
+    long n = -1;
+    if (b == 0xdc) {
+      if (r->end - r->p < 2) return -1;
+      n = (r->p[0] << 8) | r->p[1];
+      r->p += 2;
+    } else {
+      if (r->end - r->p < 4) return -1;
+      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      r->p += 4;
+    }
     for (long i = 0; i < n; i++)
       if (mpSkip(r)) return -1;
     return 0;
   }
   case 0xde:
   case 0xdf: {
-    MpReader t = *r;
-    t.p--;
-    long n = mpHdrLen(&t, 0, 0xde, 0xdf);
-    if (n < 0) return -1;
-    *r = t;
-    for (long i = 0; i < n; i++)
-      if (mpSkip(r) || mpSkip(r)) return -1;
+    // map16/32
+    long n = -1;
+    if (b == 0xde) {
+      if (r->end - r->p < 2) return -1;
+      n = (r->p[0] << 8) | r->p[1];
+      r->p += 2;
+    } else {
+      if (r->end - r->p < 4) return -1;
+      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      r->p += 4;
+    }
+    for (long i = 0; i < n; i++) {
+      if (mpSkip(r)) return -1; // key
+      if (mpSkip(r)) return -1; // value
+    }
     return 0;
   }
   case 0xc4:
@@ -271,11 +296,12 @@ int mpStrval(MpReader *r, char *out, size_t cap) {
     long long s = 0;
     int neg = 0;
     r->p++;
-    if (b < 0x80)
+    if (b < 0x80) {
       u = b;
-    else if (b >= 0xe0)
-      s = (signed char)b, neg = 1;
-    else if (b == 0xcc) {
+    } else if (b >= 0xe0) {
+      s = (signed char)b;
+      neg = 1;
+    } else if (b == 0xcc) {
       unsigned char m;
       if (mpByte(r, &m)) return -1;
       u = m;
@@ -294,20 +320,24 @@ int mpStrval(MpReader *r, char *out, size_t cap) {
     } else if (b == 0xd0) {
       signed char m;
       if (mpByte(r, (unsigned char *)&m)) return -1;
-      s = m, neg = 1;
+      s = m;
+      neg = 1;
     } else if (b == 0xd1) {
       if (r->end - r->p < 2) return -1;
-      s = (short)((r->p[0] << 8) | r->p[1]), neg = 1;
+      s = (short)((r->p[0] << 8) | r->p[1]);
+      neg = 1;
       r->p += 2;
     } else if (b == 0xd2) {
       if (r->end - r->p < 4) return -1;
-      s = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3], neg = 1;
+      s = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      neg = 1;
       r->p += 4;
     } else {
       if (r->end - r->p < 8) return -1;
       unsigned long long m = 0;
       for (int i = 0; i < 8; i++) m = (m << 8) | *r->p++;
-      s = (long long)m, neg = 1;
+      s = (long long)m;
+      neg = 1;
     }
     if (neg)
       snprintf(out, cap, "%lld", s);

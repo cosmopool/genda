@@ -57,16 +57,17 @@ static void imapHdrField(const char *hdrs, const char *name, char *out, size_t c
   out[0] = 0;
   size_t nlen = strlen(name);
   for (const char *p = hdrs; *p; p++) {
-    if ((p == hdrs || p[-1] == '\n') && !strncasecmp(p, name, nlen) && p[nlen] == ':') {
-      p += nlen + 1;
-      while (*p == ' ' || *p == '\t') p++;
+    int at_line_start = p == hdrs || p[-1] == '\n';
+    if (at_line_start && !strncasecmp(p, name, nlen) && p[nlen] == ':') {
+      const char *v = p + nlen + 1;
+      while (*v == ' ' || *v == '\t') v++;
       size_t o = 0;
-      for (; *p && *p != '\r' && *p != '\n' && o + 1 < cap; p++) out[o++] = *p;
-      while (*p == '\r' || *p == '\n') { // unfolded continuation
-        if ((p[1] != ' ' && p[1] != '\t') || o + 1 >= cap) break;
+      for (; *v && *v != '\r' && *v != '\n' && o + 1 < cap; v++) out[o++] = *v;
+      while (*v == '\r' || *v == '\n') { // unfolded continuation
+        if ((v[1] != ' ' && v[1] != '\t') || o + 1 >= cap) break;
         out[o++] = ' ';
-        p += 2;
-        while (*p && *p != '\r' && *p != '\n' && o + 1 < cap) out[o++] = *p++;
+        v += 2;
+        while (*v && *v != '\r' && *v != '\n' && o + 1 < cap) out[o++] = *v++;
       }
       out[o] = 0;
       return;

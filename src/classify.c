@@ -30,8 +30,9 @@ static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
     // offsets below — only match where the date literally starts.
     if (!isdigit((unsigned char)*s)) continue;
     int Y, M, D, h = -1, m = -1;
-    if (sscanf(s, "%4d-%2d-%2d", &Y, &M, &D) == 3 && Y >= 2020 && Y <= 2100 && M >= 1 &&
-        M <= 12 && D >= 1 && D <= 31) {
+    int got = sscanf(s, "%4d-%2d-%2d", &Y, &M, &D);
+    int valid = got == 3 && Y >= 2020 && Y <= 2100 && M >= 1 && M <= 12 && D >= 1 && D <= 31;
+    if (valid) {
       if ((s[10] == 'T' || s[10] == ' ') && sscanf(s + 11, "%2d:%2d", &h, &m) == 2 && h >= 0 &&
           h < 24 && m >= 0 && m < 60)
         snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:00Z", Y, M, D, h, m);

@@ -63,20 +63,28 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
     if (mpStrval(&r, k, sizeof k)) return -1;
     char *dst = NULL;
     size_t cap = 0;
-    if (!strcmp(k, "source"))
-      dst = in->source, cap = sizeof in->source;
-    else if (!strcmp(k, "app"))
-      dst = in->app, cap = sizeof in->app;
-    else if (!strcmp(k, "title"))
-      dst = in->title, cap = sizeof in->title;
-    else if (!strcmp(k, "text"))
-      dst = in->text, cap = sizeof in->text;
-    else if (!strcmp(k, "time"))
-      dst = in->time, cap = sizeof in->time;
-    else if (!strcmp(k, "from"))
-      dst = in->from, cap = sizeof in->from;
-    else if (!strcmp(k, "ext_id"))
-      dst = in->ext_id, cap = sizeof in->ext_id;
+    if (!strcmp(k, "source")) {
+      dst = in->source;
+      cap = sizeof in->source;
+    } else if (!strcmp(k, "app")) {
+      dst = in->app;
+      cap = sizeof in->app;
+    } else if (!strcmp(k, "title")) {
+      dst = in->title;
+      cap = sizeof in->title;
+    } else if (!strcmp(k, "text")) {
+      dst = in->text;
+      cap = sizeof in->text;
+    } else if (!strcmp(k, "time")) {
+      dst = in->time;
+      cap = sizeof in->time;
+    } else if (!strcmp(k, "from")) {
+      dst = in->from;
+      cap = sizeof in->from;
+    } else if (!strcmp(k, "ext_id")) {
+      dst = in->ext_id;
+      cap = sizeof in->ext_id;
+    }
     if (dst) {
       if (mpStrval(&r, dst, cap)) return -1;
     } else if (mpSkip(&r)) {
