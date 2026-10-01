@@ -29,15 +29,16 @@ static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
     // sscanf skips leading whitespace, which would shift the s[10]/s+11
     // offsets below — only match where the date literally starts.
     if (!isdigit((unsigned char)*s)) continue;
-    int Y, M, D, h = -1, m = -1;
-    int got = sscanf(s, "%4d-%2d-%2d", &Y, &M, &D);
-    int valid = got == 3 && Y >= 2020 && Y <= 2100 && M >= 1 && M <= 12 && D >= 1 && D <= 31;
+    int year, month, day, h = -1, m = -1;
+    int got = sscanf(s, "%4d-%2d-%2d", &year, &month, &day);
+    int valid = got == 3 && year >= 2020 && year <= 2100 &&
+                month >= 1 && month <= 12 && day >= 1 && day <= 31;
     if (valid) {
       if ((s[10] == 'T' || s[10] == ' ') && sscanf(s + 11, "%2d:%2d", &h, &m) == 2 && h >= 0 &&
           h < 24 && m >= 0 && m < 60)
-        snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:00Z", Y, M, D, h, m);
+        snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:00Z", year, month, day, h, m);
       else
-        snprintf(out, cap, "%04d-%02d-%02dT00:00:00Z", Y, M, D);
+        snprintf(out, cap, "%04d-%02d-%02dT00:00:00Z", year, month, day);
       return 1;
     }
   }

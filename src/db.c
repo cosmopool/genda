@@ -60,7 +60,7 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
   if (n < 0 || n > 64) return -1;
   for (long i = 0; i < n; i++) {
     char k[32];
-    if (mpStrval(&r, k, sizeof k)) return -1;
+    if (mpStrVal(&r, k, sizeof k)) return -1;
     char *dst = NULL;
     size_t cap = 0;
     if (!strcmp(k, "source")) {
@@ -86,7 +86,7 @@ int dbParseInput(const unsigned char *body, long len, Input *in) {
       cap = sizeof in->ext_id;
     }
     if (dst) {
-      if (mpStrval(&r, dst, cap)) return -1;
+      if (mpStrVal(&r, dst, cap)) return -1;
     } else if (mpSkip(&r)) {
       return -1;
     }

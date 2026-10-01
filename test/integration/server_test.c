@@ -16,7 +16,7 @@
 
 #define TOKEN "t-secret"
 
-static char g_db[256] = "";
+static char g_db_path[256] = "";
 static pid_t g_child = -1;
 static int test_port = 0;
 
@@ -187,7 +187,7 @@ static void testNfree(Node *nd) {
   free(nd);
 }
 
-static Node *parse(Cur *c);
+static Node *testParse(Cur *c);
 
 static unsigned long long testBeU(Cur *c, int n) {
   unsigned long long v = 0;
@@ -196,7 +196,7 @@ static unsigned long long testBeU(Cur *c, int n) {
   return v;
 }
 
-static Node *parse(Cur *c) {
+static Node *testParse(Cur *c) {
   if (c->p >= c->end) return NULL;
   unsigned char b = *c->p++;
   Node *nd = calloc(1, sizeof *nd);
@@ -208,7 +208,7 @@ static Node *parse(Cur *c) {
     nd->n = n * 2;
     nd->items = calloc(nd->n ? nd->n : 1, sizeof *nd->items);
     for (unsigned long i = 0; i < nd->n; i++)
-      if (!(nd->items[i] = parse(c))) {
+      if (!(nd->items[i] = testParse(c))) {
         testNfree(nd);
         return NULL;
       }
@@ -221,7 +221,7 @@ static Node *parse(Cur *c) {
     nd->n = n;
     nd->items = calloc(n ? n : 1, sizeof *nd->items);
     for (unsigned long i = 0; i < n; i++)
-      if (!(nd->items[i] = parse(c))) {
+      if (!(nd->items[i] = testParse(c))) {
         testNfree(nd);
         return NULL;
       }
@@ -292,7 +292,7 @@ static long testEventsTitled(const char *title) {
   long n = -1;
   if (!testHreq("GET", "/events", 1, NULL, 0, &r) && r.status == 200) {
     Cur c = {r.body, r.body + r.len};
-    Node *arr = parse(&c);
+    Node *arr = testParse(&c);
     if (arr && arr->t == N_ARR) {
       n = 0;
       for (unsigned long i = 0; i < arr->n; i++) {
@@ -311,7 +311,7 @@ static long testEventsTitled(const char *title) {
 // raw_inputs has no API; its schema is a contract (AGENTS.md), so peek it.
 static long testDbCount(const char *sql) {
   sqlite3 *db = NULL;
-  if (sqlite3_open(g_db, &db)) return -1;
+  if (sqlite3_open(g_db_path, &db)) return -1;
   sqlite3_stmt *st = NULL;
   long n = -1;
   if (!sqlite3_prepare_v2(db, sql, -1, &st, NULL) && sqlite3_step(st) == SQLITE_ROW)
@@ -344,7 +344,7 @@ TEST notificationBecomesAppointment(void) {
   ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
-  Node *m = parse(&c);
+  Node *m = testParse(&c);
   ASSERT(m);
   Node *ev = testMget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 1);
@@ -355,7 +355,7 @@ TEST notificationBecomesAppointment(void) {
   ASSERT_EQ(0, testHreq("GET", "/events", 1, NULL, 0, &r));
   ASSERT_EQ(200, r.status);
   Cur c2 = {r.body, r.body + r.len};
-  Node *arr = parse(&c2);
+  Node *arr = testParse(&c2);
   ASSERT(arr && arr->t == N_ARR);
   Node *found = testFindByTitle(arr, "Dentist 2026-10-01T10:00");
   ASSERT(found);
@@ -381,7 +381,7 @@ TEST emailBecomesObligation(void) {
 
   ASSERT_EQ(0, testHreq("GET", "/events", 1, NULL, 0, &r));
   Cur c = {r.body, r.body + r.len};
-  Node *arr = parse(&c);
+  Node *arr = testParse(&c);
   Node *found = testFindByTitle(arr, "Invoice due 2026-10-05");
   ASSERT(found);
   ASSERT_STR_EQ("obligation", testMget(found, "kind")->s);
@@ -400,7 +400,7 @@ TEST noiseIsKeptRawButNotAnEvent(void) {
   ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
-  Node *m = parse(&c);
+  Node *m = testParse(&c);
   Node *ev = testMget(m, "is_event");
   ASSERT(ev && ev->t == N_UINT && ev->u == 0);
   testNfree(m);
@@ -422,7 +422,7 @@ TEST duplicateExtIdStoresOnce(void) {
   ASSERT_EQ(200, r1.status);
   ASSERT_EQ(200, r2.status);
   Cur c1 = {r1.body, r1.body + r1.len}, c2 = {r2.body, r2.body + r2.len};
-  Node *m1 = parse(&c1), *m2 = parse(&c2);
+  Node *m1 = testParse(&c1), *m2 = testParse(&c2);
   ASSERT(m1 && m2);
   ASSERT_EQ(testMget(m1, "raw_id")->u, testMget(m2, "raw_id")->u);
   testNfree(m1);
@@ -492,14 +492,14 @@ int main(int argc, char **argv) {
     return 1;
   }
   close(tfd);
-  snprintf(g_db, sizeof g_db, "%s", tmpl);
+  snprintf(g_db_path, sizeof g_db_path, "%s", tmpl);
 
   g_child = fork();
   if (g_child == 0) {
     char port[16];
     snprintf(port, sizeof port, "%d", test_port);
     setenv("GENDA_PORT", port, 1);
-    setenv("GENDA_DB", g_db, 1);
+    setenv("GENDA_DB", g_db_path, 1);
     setenv("GENDA_TOKEN", TOKEN, 1);
     unsetenv("GENDA_IMAP_URL"); // dev shell may have one: never poll real mail
     execl(GENDA_BIN, "genda", (char *)NULL);
@@ -527,7 +527,7 @@ int main(int argc, char **argv) {
     kill(g_child, SIGTERM);
     waitpid(g_child, NULL, 0);
   }
-  unlink(g_db);
+  unlink(g_db_path);
   if (!came_up) return 1;
   GREATEST_MAIN_END();
 }

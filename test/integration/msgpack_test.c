@@ -22,24 +22,24 @@ TEST roundTripScalars(void) {
   MpReader r = {w.p, w.p + w.len};
   char k[32], v[64];
   ASSERT_EQ(4, mpHdrLen(&r, 0x80, 0xde, 0xdf));
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("title", k);
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("Dentist 2026-10-01", v);
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("raw_id", k);
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("42", v);
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("confidence", k);
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("0.9", v);
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("tags", k);
   ASSERT_EQ(2, mpHdrLen(&r, 0x90, 0xdc, 0xdd));
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("a", v);
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("b", v);
   ASSERT(r.p == r.end);
   free(w.p);
@@ -55,7 +55,7 @@ TEST longStringUsesStr8(void) {
   ASSERT(w.len == 42); // 0xd9 hdr + 40 bytes
   MpReader r = {w.p, w.p + w.len};
   char v[64];
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ(big, v);
   free(w.p);
   PASS();
@@ -71,7 +71,7 @@ TEST str8AllLengthsRoundTrip(void) {
     mpStr(&w, big);
     ASSERT_EQ(0xd9, w.p[0]);
     MpReader r = {w.p, w.p + w.len};
-    ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+    ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
     ASSERT_STR_EQ(big, v);
     ASSERT(r.p == r.end);
     free(w.p);
@@ -88,11 +88,11 @@ TEST longValueIsCutAndConsumed(void) {
   mpStr(&w, "tail");
   MpReader r = {w.p, w.p + w.len};
   char small[4];
-  ASSERT_EQ(0, mpStrval(&r, small, sizeof small));
+  ASSERT_EQ(0, mpStrVal(&r, small, sizeof small));
   ASSERT_STR_EQ("Den", small);
-  ASSERT_EQ(0, mpStrval(&r, small, sizeof small));
+  ASSERT_EQ(0, mpStrVal(&r, small, sizeof small));
   ASSERT_STR_EQ("123", small);
-  ASSERT_EQ(0, mpStrval(&r, small, sizeof small));
+  ASSERT_EQ(0, mpStrVal(&r, small, sizeof small));
   ASSERT_STR_EQ("tai", small);
   ASSERT(r.p == r.end);
   free(w.p);
@@ -127,12 +127,12 @@ TEST skipNestedValues(void) {
   MpReader r = {w.p, w.p + w.len};
   char k[32], v[32];
   ASSERT_EQ(2, mpHdrLen(&r, 0x80, 0xde, 0xdf));
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("arr", k);
   ASSERT_EQ(0, mpSkip(&r)); // whole array incl. nested map
-  ASSERT_EQ(0, mpStrval(&r, k, sizeof k));
+  ASSERT_EQ(0, mpStrVal(&r, k, sizeof k));
   ASSERT_STR_EQ("tail", k);
-  ASSERT_EQ(0, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
   ASSERT_STR_EQ("7", v);
   ASSERT(r.p == r.end);
   free(w.p);
@@ -143,7 +143,7 @@ TEST truncatedInputFails(void) {
   char v[32];
   unsigned char cut[] = {0xa5, 'h', 'i'}; // fixstr(5) with 2 bytes
   MpReader r = {cut, cut + sizeof cut};
-  ASSERT_EQ(-1, mpStrval(&r, v, sizeof v));
+  ASSERT_EQ(-1, mpStrVal(&r, v, sizeof v));
   unsigned char notmap[] = {0x01};
   MpReader r2 = {notmap, notmap + 1};
   ASSERT_EQ(-1, mpHdrLen(&r2, 0x80, 0xde, 0xdf));
@@ -151,11 +151,11 @@ TEST truncatedInputFails(void) {
   ASSERT_EQ(-1, mpSkip(&r3));
   unsigned char scalar[] = {0xc0, 0xc3, 0x2a};
   MpReader r4 = {scalar, scalar + sizeof scalar};
-  ASSERT_EQ(0, mpStrval(&r4, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r4, v, sizeof v));
   ASSERT_STR_EQ("", v);
-  ASSERT_EQ(0, mpStrval(&r4, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r4, v, sizeof v));
   ASSERT_STR_EQ("true", v);
-  ASSERT_EQ(0, mpStrval(&r4, v, sizeof v));
+  ASSERT_EQ(0, mpStrVal(&r4, v, sizeof v));
   ASSERT_STR_EQ("42", v);
   PASS();
 }

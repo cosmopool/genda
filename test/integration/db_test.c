@@ -12,10 +12,10 @@
 #include <string.h>
 #include <unistd.h>
 
-static char tDb[256] = "";
+static char tmp_db_path[256] = "";
 
 // Build Input through the boundary parser, as /ingest does. ext "" = omitted.
-static int fillInput(Input *in, const char *ext, const char *title, const char *text) {
+static int testFillInput(Input *in, const char *ext, const char *title, const char *text) {
   MpWriter w = {0};
   mpMap(&w, ext[0] ? 4 : 3);
   mpStr(&w, "source");
@@ -35,7 +35,7 @@ static int fillInput(Input *in, const char *ext, const char *title, const char *
 
 // Events in range; with title != "" only those with exactly that title.
 // -1 on error.
-static long feedCount(const char *since, const char *until, const char *title) {
+static long testFeedCount(const char *since, const char *until, const char *title) {
   MpWriter w = {0};
   if (dbPackEvents(since, until, &w)) return -1;
   MpReader r = {w.p, w.p + w.len};
@@ -48,7 +48,7 @@ static long feedCount(const char *since, const char *until, const char *title) {
     int match = !title[0];
     for (long j = 0; j < m && !bad; j++) {
       char k[32], v[512]; // every event value is a scalar
-      bad = mpStrval(&r, k, sizeof k) || mpStrval(&r, v, sizeof v);
+      bad = mpStrVal(&r, k, sizeof k) || mpStrVal(&r, v, sizeof v);
       if (!bad && !strcmp(k, "title") && !strcmp(v, title)) match = 1;
     }
     count += match;
@@ -60,7 +60,7 @@ static long feedCount(const char *since, const char *until, const char *title) {
 // Titles without event keywords keep these raw-only: no events rows.
 TEST storesAndDedupesRaw(void) {
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-raw-1", "Note to self", "confirming"));
+  ASSERT_EQ(0, testFillInput(&in, "db-raw-1", "Note to self", "confirming"));
   Ingest first = dbIngest(&in);
   ASSERT(first.id.v > 0);
   ASSERT_EQ(0, first.is_event);
@@ -70,46 +70,48 @@ TEST storesAndDedupesRaw(void) {
 
 TEST derivesMissingExtId(void) {
   Input a, b;
-  ASSERT_EQ(0, fillInput(&a, "", "Note to self", "unique derive body"));
-  ASSERT_EQ(0, fillInput(&b, "", "Note to self", "unique derive body"));
+  ASSERT_EQ(0, testFillInput(&a, "", "Note to self", "unique derive body"));
+  ASSERT_EQ(0, testFillInput(&b, "", "Note to self", "unique derive body"));
   ASSERT(a.time[0]); // missing time defaults to now
   RawId first = dbIngest(&a).id;
   ASSERT(first.v > 0);
   ASSERT_EQ(first.v, dbIngest(&b).id.v); // same content, no ext_id: dedupes
-  ASSERT_EQ(0, fillInput(&b, "", "Note to self", "another body"));
+  ASSERT_EQ(0, testFillInput(&b, "", "Note to self", "another body"));
   ASSERT(dbIngest(&b).id.v != first.v); // different content: distinct row
   PASS();
 }
 
 TEST storesAndFiltersEvents(void) {
   const char *mid = "2026-10-15T00:00:00Z";
-  long all = feedCount("", "", ""), late = feedCount(mid, "", ""), early = feedCount("", mid, "");
+  long all = testFeedCount("", "", "");
+  long late = testFeedCount(mid, "", "");
+  long early = testFeedCount("", mid, "");
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-ev-a", "Dentist 2026-10-01T10:00", "confirming"));
+  ASSERT_EQ(0, testFillInput(&in, "db-ev-a", "Dentist 2026-10-01T10:00", "confirming"));
   ASSERT(dbIngest(&in).is_event);
-  ASSERT_EQ(0, fillInput(&in, "db-ev-b", "Dentist 2026-11-01T10:00", "confirming"));
+  ASSERT_EQ(0, testFillInput(&in, "db-ev-b", "Dentist 2026-11-01T10:00", "confirming"));
   ASSERT(dbIngest(&in).is_event);
-  ASSERT_EQ(all + 2, feedCount("", "", ""));
-  ASSERT_EQ(late + 1, feedCount(mid, "", ""));
-  ASSERT_EQ(early + 1, feedCount("", mid, ""));
-  ASSERT_EQ(1, feedCount("", "", "Dentist 2026-10-01T10:00"));
-  ASSERT_EQ(1, feedCount(mid, "", "Dentist 2026-11-01T10:00"));
-  ASSERT_EQ(0, feedCount(mid, "", "Dentist 2026-10-01T10:00"));
-  ASSERT_EQ(0, feedCount("", mid, "Dentist 2026-11-01T10:00"));
+  ASSERT_EQ(all + 2, testFeedCount("", "", ""));
+  ASSERT_EQ(late + 1, testFeedCount(mid, "", ""));
+  ASSERT_EQ(early + 1, testFeedCount("", mid, ""));
+  ASSERT_EQ(1, testFeedCount("", "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(1, testFeedCount(mid, "", "Dentist 2026-11-01T10:00"));
+  ASSERT_EQ(0, testFeedCount(mid, "", "Dentist 2026-10-01T10:00"));
+  ASSERT_EQ(0, testFeedCount("", mid, "Dentist 2026-11-01T10:00"));
   PASS();
 }
 
 TEST ingestTwiceStoresOneEvent(void) {
   Input in;
-  ASSERT_EQ(0, fillInput(&in, "db-ev-twice", "Dentist twice", "confirming"));
-  long before = feedCount("", "", "");
+  ASSERT_EQ(0, testFillInput(&in, "db-ev-twice", "Dentist twice", "confirming"));
+  long before = testFeedCount("", "", "");
   Ingest first = dbIngest(&in);
   Ingest again = dbIngest(&in); // e.g. same mail seen by IMAP again
   ASSERT(first.id.v > 0);
   ASSERT_EQ(first.id.v, again.id.v);
   ASSERT(first.is_event && again.is_event);
-  ASSERT_EQ(before + 1, feedCount("", "", ""));
-  ASSERT_EQ(1, feedCount("", "", "Dentist twice"));
+  ASSERT_EQ(before + 1, testFeedCount("", "", ""));
+  ASSERT_EQ(1, testFeedCount("", "", "Dentist twice"));
   PASS();
 }
 
@@ -139,14 +141,14 @@ int main(int argc, char **argv) {
     unlink(tmpl);
     return 1;
   }
-  snprintf(tDb, sizeof tDb, "%s", tmpl);
+  snprintf(tmp_db_path, sizeof tmp_db_path, "%s", tmpl);
   RUN_TEST(storesAndDedupesRaw);
   RUN_TEST(derivesMissingExtId);
   RUN_TEST(storesAndFiltersEvents);
   RUN_TEST(ingestTwiceStoresOneEvent);
   RUN_TEST(metaRoundTrip);
   sqlite3_close(g_db);
-  unlink(tDb);
+  unlink(tmp_db_path);
   GREATEST_MAIN_END();
   (void)argc;
   (void)argv;

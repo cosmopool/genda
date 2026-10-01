@@ -26,6 +26,6 @@ int mpSkip(MpReader *r);
 // Next value as NUL-terminated text into out (str/bin as-is, scalars
 // rendered), cut to cap-1 bytes; the whole value is consumed either way.
 // cap >= 1. Returns 0 ok, -1 on truncated or non-scalar input.
-int mpStrval(MpReader *r, char *out, size_t cap);
+int mpStrVal(MpReader *r, char *out, size_t cap);
 
 #endif

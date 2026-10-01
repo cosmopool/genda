@@ -269,7 +269,7 @@ int mpSkip(MpReader *r) {
 
 // Read next value as NUL-terminated string (str/bin families) or scalar
 // rendered as text (uint/int/float/bool/nil->"") into out, cut to cap-1.
-int mpStrval(MpReader *r, char *out, size_t cap) {
+int mpStrVal(MpReader *r, char *out, size_t cap) {
   if (r->p >= r->end) return -1;
   unsigned char b = *r->p;
   if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda || b == 0xdb || b == 0xc4 || b == 0xc5 ||
