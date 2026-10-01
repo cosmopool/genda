@@ -348,7 +348,8 @@ int mpStrVal(MpReader *r, char *out, usize cap) {
       r->p += 2;
     } else if (b == 0xd2) {
       if (r->end - r->p < 4) return -1;
-      s = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      u32 m = ((u32)r->p[0] << 24) | ((u32)r->p[1] << 16) | ((u32)r->p[2] << 8) | r->p[3];
+      s = (i32)m; // sign-extend
       neg = 1;
       r->p += 4;
     } else {

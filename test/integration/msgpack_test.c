@@ -46,6 +46,22 @@ TEST roundTripScalars(void) {
   PASS();
 }
 
+TEST signedIntsRender(void) {
+  // negative fixint, int8, int16, int32, int64 (all -1 except the last two)
+  static const u8 in[] = {0xff, 0xd0, 0xff, 0xd1, 0xff, 0xff, 0xd2, 0xff, 0xff, 0xff, 0xff,
+                          0xd2, 0x80, 0x00, 0x00, 0x00, 0xd3, 0xff, 0xff, 0xff, 0xff,
+                          0xff, 0xff, 0xff, 0xfe};
+  static const char *want[] = {"-1", "-1", "-1", "-1", "-2147483648", "-2"};
+  MpReader r = {in, in + sizeof in};
+  char v[32];
+  for (usize i = 0; i < sizeof want / sizeof want[0]; i++) {
+    ASSERT_EQ(0, mpStrVal(&r, v, sizeof v));
+    ASSERT_STR_EQ(want[i], v);
+  }
+  ASSERT(r.p == r.end);
+  PASS();
+}
+
 TEST longStringUsesStr8(void) {
   char big[41];
   memset(big, 'x', 40);
@@ -165,6 +181,7 @@ GREATEST_MAIN_DEFS();
 int main(int argc, char **argv) {
   GREATEST_MAIN_BEGIN();
   RUN_TEST(roundTripScalars);
+  RUN_TEST(signedIntsRender);
   RUN_TEST(longStringUsesStr8);
   RUN_TEST(str8AllLengthsRoundTrip);
   RUN_TEST(longValueIsCutAndConsumed);
