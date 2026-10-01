@@ -2,9 +2,11 @@
 #ifndef GENDA_CONFIG_H
 #define GENDA_CONFIG_H
 
+#include "core.h"
+
 #include <sqlite3.h>
 
-extern int g_port;
+extern i32 g_port;
 extern char g_db_path[1024];
 extern char g_token[256];
 extern sqlite3 *g_db;

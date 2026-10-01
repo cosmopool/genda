@@ -10,21 +10,21 @@
 #include <string.h>
 
 // Lowercase src into dst (cap >= 1), cut to cap-1. Returns bytes written.
-static size_t classifyLowerCopy(const char *src, char *dst, size_t cap) {
-  size_t i = 0;
+static usize classifyLowerCopy(const char *src, char *dst, usize cap) {
+  usize i = 0;
   for (; src[i] && i + 1 < cap; i++) dst[i] = (char)tolower((unsigned char)src[i]);
   dst[i] = 0;
   return i;
 }
 
 static int classifyContainsAny(const char *hay, const char *words[]) {
-  for (int i = 0; words[i]; i++)
+  for (i32 i = 0; words[i]; i++)
     if (strstr(hay, words[i])) return 1;
   return 0;
 }
 
 // First YYYY-MM-DD([T ]HH:MM) occurrence -> out. Returns 1 found.
-static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
+static int classifyScanIsoDate(const char *s, char *out, usize cap) {
   for (; *s; s++) {
     // sscanf skips leading whitespace, which would shift the s[10]/s+11
     // offsets below — only match where the date literally starts.
@@ -50,7 +50,7 @@ static void classifyHeuristic(const Input *in, Classified *c) {
   snprintf(c->title, sizeof c->title, "%s", in->title[0] ? in->title : in->text);
   // lowercased "title text"; fits whole: title < sizeof title, text < sizeof text
   char hay[sizeof in->title + sizeof in->text];
-  size_t n = classifyLowerCopy(in->title, hay, sizeof hay);
+  usize n = classifyLowerCopy(in->title, hay, sizeof hay);
   hay[n++] = ' ';
   classifyLowerCopy(in->text, hay + n, sizeof hay - n);
   static const char *appt[] = {"meeting",  "appointment", "call",     "interview", "dentist",

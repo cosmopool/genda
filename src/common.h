@@ -2,14 +2,16 @@
 #ifndef GENDA_COMMON_H
 #define GENDA_COMMON_H
 
+#include "core.h"
+
 // raw_inputs.id. v == 0 means "no row": sqlite rowids are always > 0.
 typedef struct {
-  long long v;
+  i64 v;
 } RawId;
 
 // Highest IMAP UID already ingested (meta.imap_last_uid).
 typedef struct {
-  long v;
+  i64 v;
 } ImapUid;
 
 // Closed set; the wire/SQL text lives in db.c.
@@ -26,7 +28,7 @@ typedef struct {
 typedef struct {
   char title[512], starts_at[64], deadline[64], location[256];
   EventKind kind;
-  double confidence;
+  f64 confidence;
   int is_event; // confident enough to become an events row
 } Classified;
 

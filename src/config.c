@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int g_port = 8080;
+i32 g_port = 8080;
 char g_db_path[1024] = "./genda.db";
 char g_token[256] = "";
 sqlite3 *g_db = NULL;

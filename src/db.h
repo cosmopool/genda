@@ -6,10 +6,10 @@
 #include "msgpack.h"
 
 int dbOpen(void);
-void dbUtcNow(char *out, size_t n);
+void dbUtcNow(char *out, usize n);
 // Parse msgpack map body into Input. Unknown keys skipped. Missing ext_id is
 // derived by hash of source/title/text, missing time is now. Returns 0 ok.
-int dbParseInput(const unsigned char *body, long len, Input *in);
+int dbParseInput(const u8 *body, i64 len, Input *in);
 
 typedef struct {
   RawId id; // {0} on db error (logged)

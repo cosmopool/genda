@@ -2,30 +2,30 @@
 #ifndef GENDA_MSGPACK_H
 #define GENDA_MSGPACK_H
 
-#include <stddef.h>
+#include "core.h"
 
 typedef struct {
-  unsigned char *p;
-  size_t len, cap;
+  u8 *p;
+  usize len, cap;
 } MpWriter;
 
 typedef struct {
-  const unsigned char *p, *end;
+  const u8 *p, *end;
 } MpReader;
 
-void mpReserve(MpWriter *w, size_t extra);
-void mpMap(MpWriter *w, unsigned long n);
-void mpArr(MpWriter *w, unsigned long n);
+void mpReserve(MpWriter *w, usize extra);
+void mpMap(MpWriter *w, u64 n);
+void mpArr(MpWriter *w, u64 n);
 void mpStr(MpWriter *w, const char *s);
-void mpU64(MpWriter *w, unsigned long long v);
-void mpF64(MpWriter *w, double v);
+void mpU64(MpWriter *w, u64 v);
+void mpF64(MpWriter *w, f64 v);
 // If next value is a map/array header, consume it and return length. Else -1.
-long mpHdrLen(MpReader *r, unsigned char fix, unsigned char b16, unsigned char b32);
+i64 mpHdrLen(MpReader *r, u8 fix, u8 b16, u8 b32);
 // Skip one whole value (nested included). Returns 0 ok.
 int mpSkip(MpReader *r);
 // Next value as NUL-terminated text into out (str/bin as-is, scalars
 // rendered), cut to cap-1 bytes; the whole value is consumed either way.
 // cap >= 1. Returns 0 ok, -1 on truncated or non-scalar input.
-int mpStrVal(MpReader *r, char *out, size_t cap);
+int mpStrVal(MpReader *r, char *out, usize cap);
 
 #endif

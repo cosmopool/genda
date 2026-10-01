@@ -7,6 +7,7 @@
 #include "db.h"
 
 #include <curl/curl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,14 +17,14 @@
 // Response text, NUL-terminated. Allocated once in imapThread, never NULL.
 typedef struct {
   char *p;
-  size_t len, cap;
+  usize len, cap;
 } CurlBuf;
 
 static size_t imapCurlSink(void *ptr, size_t size, size_t n, void *ud) {
   CurlBuf *b = ud;
-  size_t want = size * n;
+  usize want = size * n;
   if (b->len + want + 1 > b->cap) {
-    size_t ncap = b->cap * 2;
+    usize ncap = b->cap * 2;
     while (ncap < b->len + want + 1) ncap *= 2;
     if (ncap > 262144) return 0;
     char *np = realloc(b->p, ncap);
@@ -53,15 +54,15 @@ static int imapCmd(CURL *ch, const char *cmd, CurlBuf *out) {
 }
 
 // Unfold + extract a header field value into out.
-static void imapHdrField(const char *hdrs, const char *name, char *out, size_t cap) {
+static void imapHdrField(const char *hdrs, const char *name, char *out, usize cap) {
   out[0] = 0;
-  size_t nlen = strlen(name);
+  usize nlen = strlen(name);
   for (const char *p = hdrs; *p; p++) {
     int at_line_start = p == hdrs || p[-1] == '\n';
     if (at_line_start && !strncasecmp(p, name, nlen) && p[nlen] == ':') {
       const char *v = p + nlen + 1;
       while (*v == ' ' || *v == '\t') v++;
-      size_t o = 0;
+      usize o = 0;
       for (; *v && *v != '\r' && *v != '\n' && o + 1 < cap; v++) out[o++] = *v;
       for (;;) { // unfold: line break (CRLF or LF) followed by SP/HTAB
         const char *nl = v;
@@ -94,7 +95,7 @@ static Input imapParseInput(const char *hdrs, const char *text, ImapUid uid) {
   if (mid[0])
     snprintf(in.ext_id, sizeof in.ext_id, "%s", mid);
   else
-    snprintf(in.ext_id, sizeof in.ext_id, "imap-%ld", uid.v);
+    snprintf(in.ext_id, sizeof in.ext_id, "imap-%" PRId64, uid.v);
   snprintf(in.text, sizeof in.text, "%s", text);
   return in;
 }
@@ -110,24 +111,24 @@ static void imapPollOnce(CURL *ch, CurlBuf *s, CurlBuf *h, CurlBuf *t) {
     ImapUid uid = {atol(tok)};
     if (uid.v <= last.v) continue;
     char cmd[128], fetch[64];
-    snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
+    snprintf(cmd, sizeof cmd, "UID FETCH %" PRId64 " BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
              uid.v);
     if (imapCmd(ch, cmd, h)) break;
     // first 4 KB only: Input.text keeps no more, and a huge body must not
     // fail the fetch and stall the poll on this uid forever
-    snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]<0.4096>", uid.v);
+    snprintf(fetch, sizeof fetch, "UID FETCH %" PRId64 " BODY.PEEK[TEXT]<0.4096>", uid.v);
     if (imapCmd(ch, fetch, t)) break;
     Input in = imapParseInput(h->p, t->p, uid);
     Ingest ing = dbIngest(&in);
     if (ing.id.v == 0) {
-      configLog("imap ingest failed uid=%ld", uid.v);
+      configLog("imap ingest failed uid=%" PRId64, uid.v);
       break;
     }
     if (uid.v > max.v) {
       max = uid;
       dbMetaUidSet(max);
     }
-    configLog("imap stored uid=%ld raw=%lld", uid.v, ing.id.v);
+    configLog("imap stored uid=%" PRId64 " raw=%" PRId64, uid.v, ing.id.v);
   }
 }
 
@@ -135,7 +136,7 @@ void *imapThread(void *arg) {
   (void)arg;
   const char *url = configEnv("GENDA_IMAP_URL", "");
   if (!*url) return NULL; // not configured: no-op
-  long every = atol(configEnv("GENDA_IMAP_POLL_SEC", "300"));
+  i64 every = atol(configEnv("GENDA_IMAP_POLL_SEC", "300"));
   if (every < 60) every = 60;
   // one handle and one set of buffers for the thread's lifetime
   CurlBuf s = {malloc(4096), 0, 4096}, h = {malloc(4096), 0, 4096}, t = {malloc(4096), 0, 4096};
@@ -154,9 +155,9 @@ void *imapThread(void *arg) {
   curl_easy_setopt(ch, CURLOPT_WRITEFUNCTION, imapCurlSink);
   curl_easy_setopt(ch, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
   curl_easy_setopt(ch, CURLOPT_TIMEOUT_MS, 60000L);
-  configLog("imap polling %s every %lds", url, every);
+  configLog("imap polling %s every %" PRId64 "s", url, every);
   for (;;) {
-    sleep((unsigned)every);
+    sleep((u32)every);
     imapPollOnce(ch, &s, &h, &t);
   }
   return NULL;

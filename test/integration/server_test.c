@@ -1,6 +1,7 @@
 // Integration tests: real genda binary + temp sqlite, exercised over HTTP.
 // Asserts on wire behavior (msgpack): events only via GET /events.
 #include <arpa/inet.h>
+#include <inttypes.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sqlite3.h>
@@ -12,20 +13,21 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../../src/core.h"
 #include "../vendor/greatest.h"
 
 #define TOKEN "t-secret"
 
 static char g_db_path[256] = "";
 static pid_t g_child = -1;
-static int test_port = 0;
+static i32 test_port = 0;
 
 // ---- tiny http client (test side) ---------------------------------------
 
 typedef struct {
   int status;
-  unsigned char *body;
-  long len;
+  u8 *body;
+  i64 len;
 } Resp;
 
 static void testRespFree(Resp *r) {
@@ -34,50 +36,50 @@ static void testRespFree(Resp *r) {
 }
 
 // Send a raw request head (+ optional body) and read the whole response.
-static int testHraw(const char *hdr, int hlen, const unsigned char *body, long blen, Resp *out) {
+static int testHraw(const char *hdr, i64 hlen, const u8 *body, i64 blen, Resp *out) {
   memset(out, 0, sizeof *out);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   struct timeval tv = {.tv_sec = 5};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)test_port)};
+  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((u16)test_port)};
   a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (connect(fd, (struct sockaddr *)&a, sizeof a)) {
     close(fd);
     return -1;
   }
   // (headers + optional body, always fully written)
-  size_t off = 0;
-  while (off < (size_t)hlen) {
-    ssize_t n = send(fd, hdr + off, (size_t)hlen - off, 0);
+  usize off = 0;
+  while (off < (usize)hlen) {
+    ssize_t n = send(fd, hdr + off, (usize)hlen - off, 0);
     if (n <= 0) {
       close(fd);
       return -1;
     }
-    off += (size_t)n;
+    off += (usize)n;
   }
   off = 0;
-  while (body && off < (size_t)blen) {
-    ssize_t n = send(fd, body + off, (size_t)blen - off, 0);
+  while (body && off < (usize)blen) {
+    ssize_t n = send(fd, body + off, (usize)blen - off, 0);
     if (n <= 0) {
       close(fd);
       return -1;
     }
-    off += (size_t)n;
+    off += (usize)n;
   }
-  size_t cap = 65536, got = 0;
-  unsigned char *buf = malloc(cap);
+  usize cap = 65536, got = 0;
+  u8 *buf = malloc(cap);
   if (!buf) {
     close(fd);
     return -1;
   }
   ssize_t n;
   while ((n = recv(fd, buf + got, cap - got, 0)) > 0) {
-    got += (size_t)n;
+    got += (usize)n;
     if (got == cap) {
       cap *= 2;
-      unsigned char *nb = realloc(buf, cap);
+      u8 *nb = realloc(buf, cap);
       if (!nb) {
         free(buf);
         close(fd);
@@ -96,28 +98,28 @@ static int testHraw(const char *hdr, int hlen, const unsigned char *body, long b
     free(buf);
     return -1;
   }
-  long h = (long)(eoh - (char *)buf) + 4;
-  out->len = (long)got - h;
-  out->body = malloc((size_t)out->len + 1);
+  i64 h = (i64)(eoh - (char *)buf) + 4;
+  out->len = (i64)got - h;
+  out->body = malloc((usize)out->len + 1);
   if (!out->body) {
     free(buf);
     return -1;
   }
-  memcpy(out->body, buf + h, (size_t)out->len);
+  memcpy(out->body, buf + h, (usize)out->len);
   out->body[out->len] = 0;
   free(buf);
   return 0;
 }
 
-static int testHreq(const char *method, const char *path, int auth, const unsigned char *body,
-                long blen, Resp *out) {
+static int testHreq(const char *method, const char *path, int auth, const u8 *body,
+                i64 blen, Resp *out) {
   char hdr[1024];
   int hlen = snprintf(hdr, sizeof hdr, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n",
                       method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "");
   if (body)
     hlen = snprintf(hdr, sizeof hdr,
                     "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/msgpack\r\n"
-                    "Content-Length: %ld\r\nConnection: close\r\n\r\n",
+                    "Content-Length: %" PRId64 "\r\nConnection: close\r\n\r\n",
                     method, path, auth ? "Authorization: Bearer " TOKEN "\r\n" : "", blen);
   return testHraw(hdr, hlen, body, blen, out);
 }
@@ -125,11 +127,11 @@ static int testHreq(const char *method, const char *path, int auth, const unsign
 // ---- tiny msgpack (test side, independent of server impl) ----------------
 
 typedef struct {
-  unsigned char *p;
-  size_t len, cap;
+  u8 *p;
+  usize len, cap;
 } Buf;
 
-static void testBput(Buf *b, const void *s, size_t n) {
+static void testBput(Buf *b, const void *s, usize n) {
   if (b->len + n > b->cap) {
     b->cap = b->cap ? b->cap * 2 : 256;
     while (b->cap < b->len + n) b->cap *= 2;
@@ -139,27 +141,27 @@ static void testBput(Buf *b, const void *s, size_t n) {
   b->len += n;
 }
 
-static void testPkMap(Buf *b, unsigned n) {
-  unsigned char h = (unsigned char)(0x80 | n);
+static void testPkMap(Buf *b, u32 n) {
+  u8 h = (u8)(0x80 | n);
   testBput(b, &h, 1);
 }
 
 static void testPkStr(Buf *b, const char *s) {
-  size_t n = strlen(s);
+  usize n = strlen(s);
   if (n < 32) {
-    unsigned char h = (unsigned char)(0xa0 | n);
+    u8 h = (u8)(0xa0 | n);
     testBput(b, &h, 1);
   } else {
-    unsigned char h[2] = {0xd9, (unsigned char)n};
+    u8 h[2] = {0xd9, (u8)n};
     testBput(b, h, 2);
   }
   testBput(b, s, n);
 }
 
 // pack {k0:v0, ...} from parallel arrays
-static void testPkInput(Buf *b, const char *keys[], const char *vals[], int n) {
-  testPkMap(b, (unsigned)n);
-  for (int i = 0; i < n; i++) {
+static void testPkInput(Buf *b, const char *keys[], const char *vals[], i32 n) {
+  testPkMap(b, (u32)n);
+  for (i32 i = 0; i < n; i++) {
     testPkStr(b, keys[i]);
     testPkStr(b, vals[i]);
   }
@@ -168,46 +170,46 @@ static void testPkInput(Buf *b, const char *keys[], const char *vals[], int n) {
 typedef enum { N_NIL, N_BOOL, N_UINT, N_STR, N_ARR, N_MAP, N_DBL } NodeType;
 typedef struct Node {
   NodeType t;
-  unsigned long long u;
-  double d;
+  u64 u;
+  f64 d;
   char *s;
   struct Node **items;
-  unsigned long n; // arr len, or map pair count (*2 items)
+  u64 n; // arr len, or map pair count (*2 items)
 } Node;
 
 typedef struct {
-  const unsigned char *p, *end;
+  const u8 *p, *end;
 } Cur;
 
 static void testNfree(Node *nd) {
   if (!nd) return;
   free(nd->s);
-  for (unsigned long i = 0; i < nd->n; i++) testNfree(nd->items[i]);
+  for (u64 i = 0; i < nd->n; i++) testNfree(nd->items[i]);
   free(nd->items);
   free(nd);
 }
 
 static Node *testParse(Cur *c);
 
-static unsigned long long testBeU(Cur *c, int n) {
-  unsigned long long v = 0;
-  for (int i = 0; i < n; i++) v = (v << 8) | c->p[i];
+static u64 testBeU(Cur *c, i32 n) {
+  u64 v = 0;
+  for (i32 i = 0; i < n; i++) v = (v << 8) | c->p[i];
   c->p += n;
   return v;
 }
 
 static Node *testParse(Cur *c) {
   if (c->p >= c->end) return NULL;
-  unsigned char b = *c->p++;
+  u8 b = *c->p++;
   Node *nd = calloc(1, sizeof *nd);
   if (!nd) return NULL;
   if ((b & 0xf0) == 0x80 || b == 0xde || b == 0xdf) {
-    unsigned long n = (b & 0xf0) == 0x80 ? (unsigned)(b & 0x0f)
-                                         : b == 0xde ? (unsigned)testBeU(c, 2) : (unsigned)testBeU(c, 4);
+    u64 n = (b & 0xf0) == 0x80 ? (u32)(b & 0x0f)
+                               : b == 0xde ? (u32)testBeU(c, 2) : (u32)testBeU(c, 4);
     nd->t = N_MAP;
     nd->n = n * 2;
     nd->items = calloc(nd->n ? nd->n : 1, sizeof *nd->items);
-    for (unsigned long i = 0; i < nd->n; i++)
+    for (u64 i = 0; i < nd->n; i++)
       if (!(nd->items[i] = testParse(c))) {
         testNfree(nd);
         return NULL;
@@ -215,12 +217,12 @@ static Node *testParse(Cur *c) {
     return nd;
   }
   if ((b & 0xf0) == 0x90 || b == 0xdc || b == 0xdd) {
-    unsigned long n = (b & 0xf0) == 0x90 ? (unsigned)(b & 0x0f)
-                                         : b == 0xdc ? (unsigned)testBeU(c, 2) : (unsigned)testBeU(c, 4);
+    u64 n = (b & 0xf0) == 0x90 ? (u32)(b & 0x0f)
+                               : b == 0xdc ? (u32)testBeU(c, 2) : (u32)testBeU(c, 4);
     nd->t = N_ARR;
     nd->n = n;
     nd->items = calloc(n ? n : 1, sizeof *nd->items);
-    for (unsigned long i = 0; i < n; i++)
+    for (u64 i = 0; i < n; i++)
       if (!(nd->items[i] = testParse(c))) {
         testNfree(nd);
         return NULL;
@@ -228,9 +230,9 @@ static Node *testParse(Cur *c) {
     return nd;
   }
   if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda) {
-    unsigned long n = (b & 0xe0) == 0xa0 ? (unsigned)(b & 0x1f)
-                                         : b == 0xd9 ? (unsigned)testBeU(c, 1) : (unsigned)testBeU(c, 2);
-    if (c->end - c->p < (long)n) {
+    u64 n = (b & 0xe0) == 0xa0 ? (u32)(b & 0x1f)
+                               : b == 0xd9 ? (u32)testBeU(c, 1) : (u32)testBeU(c, 2);
+    if (c->end - c->p < (i64)n) {
       testNfree(nd);
       return NULL;
     }
@@ -252,7 +254,7 @@ static Node *testParse(Cur *c) {
     return nd;
   }
   if (b == 0xcb) {
-    unsigned long long u = testBeU(c, 8);
+    u64 u = testBeU(c, 8);
     nd->t = N_DBL;
     memcpy(&nd->d, &u, 8);
     return nd;
@@ -272,14 +274,14 @@ static Node *testParse(Cur *c) {
 
 static Node *testMget(Node *map, const char *key) {
   if (!map || map->t != N_MAP) return NULL;
-  for (unsigned long i = 0; i < map->n; i += 2)
+  for (u64 i = 0; i < map->n; i += 2)
     if (map->items[i]->t == N_STR && !strcmp(map->items[i]->s, key)) return map->items[i + 1];
   return NULL;
 }
 
 static Node *testFindByTitle(Node *arr, const char *title) {
   if (!arr || arr->t != N_ARR) return NULL;
-  for (unsigned long i = 0; i < arr->n; i++) {
+  for (u64 i = 0; i < arr->n; i++) {
     Node *t = testMget(arr->items[i], "title");
     if (t && t->t == N_STR && !strcmp(t->s, title)) return arr->items[i];
   }
@@ -287,15 +289,15 @@ static Node *testFindByTitle(Node *arr, const char *title) {
 }
 
 // GET /events and count events with exactly this title. -1 on error.
-static long testEventsTitled(const char *title) {
+static i64 testEventsTitled(const char *title) {
   Resp r;
-  long n = -1;
+  i64 n = -1;
   if (!testHreq("GET", "/events", 1, NULL, 0, &r) && r.status == 200) {
     Cur c = {r.body, r.body + r.len};
     Node *arr = testParse(&c);
     if (arr && arr->t == N_ARR) {
       n = 0;
-      for (unsigned long i = 0; i < arr->n; i++) {
+      for (u64 i = 0; i < arr->n; i++) {
         Node *t = testMget(arr->items[i], "title");
         if (t && t->t == N_STR && !strcmp(t->s, title)) n++;
       }
@@ -309,13 +311,13 @@ static long testEventsTitled(const char *title) {
 // ---- db peek (resulting state) -------------------------------------------
 
 // raw_inputs has no API; its schema is a contract (AGENTS.md), so peek it.
-static long testDbCount(const char *sql) {
+static i64 testDbCount(const char *sql) {
   sqlite3 *db = NULL;
   if (sqlite3_open(g_db_path, &db)) return -1;
   sqlite3_stmt *st = NULL;
-  long n = -1;
+  i64 n = -1;
   if (!sqlite3_prepare_v2(db, sql, -1, &st, NULL) && sqlite3_step(st) == SQLITE_ROW)
-    n = (long)sqlite3_column_int64(st, 0);
+    n = (i64)sqlite3_column_int64(st, 0);
   sqlite3_finalize(st);
   sqlite3_close(db);
   return n;
@@ -325,7 +327,7 @@ static long testDbCount(const char *sql) {
 
 TEST authIsEnforced(void) {
   Resp r;
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 0, (unsigned char *)"x", 1, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 0, (u8 *)"x", 1, &r));
   ASSERT_EQ(401, r.status);
   testRespFree(&r);
   ASSERT_EQ(0, testHreq("GET", "/events", 0, NULL, 0, &r));
@@ -341,7 +343,7 @@ TEST notificationBecomesAppointment(void) {
                      "2026-09-30T09:00:00Z", "dentist@x.com", "t-appt-1"};
   testPkInput(&b, k, v, 7);
   Resp r;
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
   Node *m = testParse(&c);
@@ -374,7 +376,7 @@ TEST emailBecomesObligation(void) {
                      "2026-09-30T08:00:00Z", "billing@power.com", "t-oblg-1"};
   testPkInput(&b, k, v, 7);
   Resp r;
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r));
   ASSERT_EQ(200, r.status);
   testRespFree(&r);
   free(b.p);
@@ -391,13 +393,13 @@ TEST emailBecomesObligation(void) {
 }
 
 TEST noiseIsKeptRawButNotAnEvent(void) {
-  long raws_before = testDbCount("SELECT COUNT(*) FROM raw_inputs;");
+  i64 raws_before = testDbCount("SELECT COUNT(*) FROM raw_inputs;");
   Buf b = {0};
   const char *k[] = {"title", "text", "ext_id"};
   const char *v[] = {"meme of the day", "haha look at this", "t-none-1"};
   testPkInput(&b, k, v, 3);
   Resp r;
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r));
   ASSERT_EQ(200, r.status);
   Cur c = {r.body, r.body + r.len};
   Node *m = testParse(&c);
@@ -417,8 +419,8 @@ TEST duplicateExtIdStoresOnce(void) {
   const char *v[] = {"notif", "Flight 2026-11-02T07:30", "boarding pass", "t-dup-1"};
   testPkInput(&b, k, v, 4);
   Resp r1, r2;
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r1));
-  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (long)b.len, &r2));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r1));
+  ASSERT_EQ(0, testHreq("POST", "/ingest", 1, b.p, (i64)b.len, &r2));
   ASSERT_EQ(200, r1.status);
   ASSERT_EQ(200, r2.status);
   Cur c1 = {r1.body, r1.body + r1.len}, c2 = {r2.body, r2.body + r2.len};
@@ -442,9 +444,9 @@ TEST malformedRequestIs400(void) {
       "POST /ingest HTTP/1.1\r\nContent-Length: abc\r\n\r\n",
       "POST /ingest HTTP/1.1\r\nContent-Length:\r\n\r\n",
   };
-  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+  for (usize i = 0; i < sizeof bad / sizeof bad[0]; i++) {
     Resp r;
-    ASSERT_EQ(0, testHraw(bad[i], (int)strlen(bad[i]), NULL, 0, &r));
+    ASSERT_EQ(0, testHraw(bad[i], (i64)strlen(bad[i]), NULL, 0, &r));
     ASSERT_EQ_FMT(400, r.status, "%d");
     testRespFree(&r);
   }
@@ -456,7 +458,7 @@ TEST malformedRequestIs400(void) {
 GREATEST_MAIN_DEFS();
 
 static int testWaitHealthy(void) {
-  for (int i = 0; i < 50; i++) {
+  for (i32 i = 0; i < 50; i++) {
     Resp r;
     if (!testHreq("GET", "/health", 0, NULL, 0, &r)) {
       int ok = r.status == 200;

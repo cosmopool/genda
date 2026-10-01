@@ -6,6 +6,7 @@
 #include "config.h"
 #include "msgpack.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,7 @@
 // caller string, literal or local array) outlives its statement, which is
 // finalized before the binding function returns.
 
-void dbUtcNow(char *out, size_t n) {
+void dbUtcNow(char *out, usize n) {
   time_t t = time(NULL);
   struct tm tm;
   gmtime_r(&t, &tm);
@@ -43,26 +44,26 @@ int dbOpen(void) {
   return 0;
 }
 
-static void dbDjbHex(const char *a, const char *b, const char *c, char *out, size_t n) {
-  unsigned long long h = 5381;
-  for (const char *s = a; s && *s; s++) h = h * 33 + (unsigned char)*s;
-  for (const char *s = b; s && *s; s++) h = h * 33 + (unsigned char)*s;
-  for (const char *s = c; s && *s; s++) h = h * 33 + (unsigned char)*s;
-  snprintf(out, n, "%016llx", h);
+static void dbDjbHex(const char *a, const char *b, const char *c, char *out, usize n) {
+  u64 h = 5381;
+  for (const char *s = a; s && *s; s++) h = h * 33 + (u8)*s;
+  for (const char *s = b; s && *s; s++) h = h * 33 + (u8)*s;
+  for (const char *s = c; s && *s; s++) h = h * 33 + (u8)*s;
+  snprintf(out, n, "%016" PRIx64, h);
 }
 
 // Parse msgpack map body into Input. Unknown keys skipped. Missing ext_id is
 // derived by hash of source/title/text, missing time is now. Returns 0 ok.
-int dbParseInput(const unsigned char *body, long len, Input *in) {
+int dbParseInput(const u8 *body, i64 len, Input *in) {
   *in = (Input){0};
   MpReader r = {body, body + len};
-  long n = mpHdrLen(&r, 0x80, 0xde, 0xdf);
+  i64 n = mpHdrLen(&r, 0x80, 0xde, 0xdf);
   if (n < 0 || n > 64) return -1;
-  for (long i = 0; i < n; i++) {
+  for (i64 i = 0; i < n; i++) {
     char k[32];
     if (mpStrVal(&r, k, sizeof k)) return -1;
     char *dst = NULL;
-    size_t cap = 0;
+    usize cap = 0;
     if (!strcmp(k, "source")) {
       dst = in->source;
       cap = sizeof in->source;
@@ -183,16 +184,16 @@ int dbPackEvents(const char *since, const char *until, MpWriter *w) {
   // array32 header with a count placeholder, patched after the loop, so rows
   // encode straight into w. Index, not pointer: w->p may move on realloc.
   mpReserve(w, 5);
-  size_t hdr_at = w->len;
+  usize hdr_at = w->len;
   w->p[w->len++] = 0xdd;
   w->len += 4;
-  unsigned long count = 0;
+  u64 count = 0;
   while (sqlite3_step(st) == SQLITE_ROW) {
     mpMap(w, 9);
     mpStr(w, "id");
-    mpU64(w, (unsigned long long)sqlite3_column_int64(st, 0));
+    mpU64(w, (u64)sqlite3_column_int64(st, 0));
     mpStr(w, "raw_id");
-    mpU64(w, (unsigned long long)sqlite3_column_int64(st, 1));
+    mpU64(w, (u64)sqlite3_column_int64(st, 1));
     mpStr(w, "title");
     mpStr(w, (const char *)sqlite3_column_text(st, 2));
     mpStr(w, "starts_at");
@@ -210,10 +211,10 @@ int dbPackEvents(const char *since, const char *until, MpWriter *w) {
     count++;
   }
   sqlite3_finalize(st);
-  w->p[hdr_at + 1] = (unsigned char)(count >> 24);
-  w->p[hdr_at + 2] = (unsigned char)(count >> 16);
-  w->p[hdr_at + 3] = (unsigned char)(count >> 8);
-  w->p[hdr_at + 4] = (unsigned char)count;
+  w->p[hdr_at + 1] = (u8)(count >> 24);
+  w->p[hdr_at + 2] = (u8)(count >> 16);
+  w->p[hdr_at + 3] = (u8)(count >> 8);
+  w->p[hdr_at + 4] = (u8)count;
   return 0;
 }
 
@@ -230,7 +231,7 @@ ImapUid dbMetaUid(void) {
 
 void dbMetaUidSet(ImapUid uid) {
   char v[32];
-  snprintf(v, sizeof v, "%ld", uid.v);
+  snprintf(v, sizeof v, "%" PRId64, uid.v);
   sqlite3_stmt *st = NULL;
   if (!sqlite3_prepare_v2(g_db, "INSERT OR REPLACE INTO meta(k,v) VALUES('imap_last_uid',?);",
                           -1, &st, NULL)) {

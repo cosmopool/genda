@@ -1,15 +1,16 @@
 // Minimal MessagePack subset: nil bool uint int float str bin map array.
 #include "msgpack.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void mpReserve(MpWriter *w, size_t extra) {
+void mpReserve(MpWriter *w, usize extra) {
   if (w->len + extra <= w->cap) return;
-  size_t ncap = w->cap ? w->cap * 2 : 256;
+  usize ncap = w->cap ? w->cap * 2 : 256;
   while (ncap < w->len + extra) ncap *= 2;
-  unsigned char *np = realloc(w->p, ncap);
+  u8 *np = realloc(w->p, ncap);
   if (!np) { // no recovery path for a half-written message
     fputs("msgpack: out of memory\n", stderr);
     abort();
@@ -18,108 +19,108 @@ void mpReserve(MpWriter *w, size_t extra) {
   w->cap = ncap;
 }
 
-static void mpB(MpWriter *w, unsigned char b) {
+static void mpB(MpWriter *w, u8 b) {
   mpReserve(w, 1);
   w->p[w->len++] = b;
 }
 
-void mpMap(MpWriter *w, unsigned long n) {
+void mpMap(MpWriter *w, u64 n) {
   if (n < 16) {
-    mpB(w, (unsigned char)(0x80 | n));
+    mpB(w, (u8)(0x80 | n));
     return;
   }
   if (n <= 0xffff) {
     mpReserve(w, 3);
     w->p[w->len++] = 0xde;
-    w->p[w->len++] = (unsigned char)(n >> 8);
-    w->p[w->len++] = (unsigned char)n;
+    w->p[w->len++] = (u8)(n >> 8);
+    w->p[w->len++] = (u8)n;
     return;
   }
   mpReserve(w, 5);
   w->p[w->len++] = 0xdf;
-  w->p[w->len++] = (unsigned char)(n >> 24);
-  w->p[w->len++] = (unsigned char)(n >> 16);
-  w->p[w->len++] = (unsigned char)(n >> 8);
-  w->p[w->len++] = (unsigned char)n;
+  w->p[w->len++] = (u8)(n >> 24);
+  w->p[w->len++] = (u8)(n >> 16);
+  w->p[w->len++] = (u8)(n >> 8);
+  w->p[w->len++] = (u8)n;
 }
 
-void mpArr(MpWriter *w, unsigned long n) {
+void mpArr(MpWriter *w, u64 n) {
   if (n < 16) {
-    mpB(w, (unsigned char)(0x90 | n));
+    mpB(w, (u8)(0x90 | n));
     return;
   }
   if (n <= 0xffff) {
     mpReserve(w, 3);
     w->p[w->len++] = 0xdc;
-    w->p[w->len++] = (unsigned char)(n >> 8);
-    w->p[w->len++] = (unsigned char)n;
+    w->p[w->len++] = (u8)(n >> 8);
+    w->p[w->len++] = (u8)n;
     return;
   }
   mpReserve(w, 5);
   w->p[w->len++] = 0xdd;
-  w->p[w->len++] = (unsigned char)(n >> 24);
-  w->p[w->len++] = (unsigned char)(n >> 16);
-  w->p[w->len++] = (unsigned char)(n >> 8);
-  w->p[w->len++] = (unsigned char)n;
+  w->p[w->len++] = (u8)(n >> 24);
+  w->p[w->len++] = (u8)(n >> 16);
+  w->p[w->len++] = (u8)(n >> 8);
+  w->p[w->len++] = (u8)n;
 }
 
 void mpStr(MpWriter *w, const char *s) {
-  size_t n = strlen(s);
+  usize n = strlen(s);
   if (n < 32) {
-    mpB(w, (unsigned char)(0xa0 | n));
+    mpB(w, (u8)(0xa0 | n));
   } else if (n < 256) {
     mpReserve(w, 2);
     w->p[w->len++] = 0xd9;
-    w->p[w->len++] = (unsigned char)n;
+    w->p[w->len++] = (u8)n;
   } else {
     mpReserve(w, 3);
     w->p[w->len++] = 0xda;
-    w->p[w->len++] = (unsigned char)(n >> 8);
-    w->p[w->len++] = (unsigned char)n;
+    w->p[w->len++] = (u8)(n >> 8);
+    w->p[w->len++] = (u8)n;
   }
   mpReserve(w, n);
   memcpy(w->p + w->len, s, n);
   w->len += n;
 }
 
-void mpU64(MpWriter *w, unsigned long long v) {
+void mpU64(MpWriter *w, u64 v) {
   if (v < 128) {
-    mpB(w, (unsigned char)v);
+    mpB(w, (u8)v);
     return;
   }
   mpReserve(w, 9);
   w->p[w->len++] = 0xcf;
-  for (int i = 7; i >= 0; i--) w->p[w->len++] = (unsigned char)(v >> (i * 8));
+  for (i32 i = 7; i >= 0; i--) w->p[w->len++] = (u8)(v >> (i * 8));
 }
 
-void mpF64(MpWriter *w, double v) {
+void mpF64(MpWriter *w, f64 v) {
   mpReserve(w, 9);
   w->p[w->len++] = 0xcb;
-  unsigned long long u;
+  u64 u;
   memcpy(&u, &v, 8);
-  for (int i = 7; i >= 0; i--) w->p[w->len++] = (unsigned char)(u >> (i * 8));
+  for (i32 i = 7; i >= 0; i--) w->p[w->len++] = (u8)(u >> (i * 8));
 }
 
-static int mpByte(MpReader *r, unsigned char *out) {
+static int mpByte(MpReader *r, u8 *out) {
   if (r->p >= r->end) return -1;
   *out = *r->p++;
   return 0;
 }
 
 // If next value is map/array header, return length. Else -1.
-long mpHdrLen(MpReader *r, unsigned char fix, unsigned char b16, unsigned char b32) {
-  unsigned char b;
+i64 mpHdrLen(MpReader *r, u8 fix, u8 b16, u8 b32) {
+  u8 b;
   if (mpByte(r, &b)) return -1;
   if ((b & 0xf0) == fix) return b & 0x0f;
   if (b == b16) {
     if (r->end - r->p < 2) return -1;
-    long n = (r->p[0] << 8) | r->p[1];
+    i64 n = (r->p[0] << 8) | r->p[1];
     r->p += 2;
     return n;
   }
   if (b == b32) {
     if (r->end - r->p < 4) return -1;
-    long n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+    i64 n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
     r->p += 4;
     return n;
   }
@@ -128,7 +129,7 @@ long mpHdrLen(MpReader *r, unsigned char fix, unsigned char b16, unsigned char b
 
 int mpSkip(MpReader *r);
 
-static int mpSkipN(MpReader *r, long n) {
+static int mpSkipN(MpReader *r, i64 n) {
   if (r->end - r->p < n) return -1;
   r->p += n;
   return 0;
@@ -136,29 +137,29 @@ static int mpSkipN(MpReader *r, long n) {
 
 int mpSkip(MpReader *r) {
   if (r->p >= r->end) return -1;
-  unsigned char b = *r->p;
+  u8 b = *r->p;
   if (b < 0x80 || (b >= 0xe0)) {
     r->p++;
     return 0;
   }
   if ((b & 0xe0) == 0xa0) { // fixstr
-    long n = b & 0x1f;
+    i64 n = b & 0x1f;
     r->p++;
     return mpSkipN(r, n);
   }
   if ((b & 0xf0) == 0x80) { // fixmap
-    long n = b & 0x0f;
+    i64 n = b & 0x0f;
     r->p++;
-    for (long i = 0; i < n; i++) {
+    for (i64 i = 0; i < n; i++) {
       if (mpSkip(r)) return -1; // key
       if (mpSkip(r)) return -1; // value
     }
     return 0;
   }
   if ((b & 0xf0) == 0x90) { // fixarray
-    long n = b & 0x0f;
+    i64 n = b & 0x0f;
     r->p++;
-    for (long i = 0; i < n; i++)
+    for (i64 i = 0; i < n; i++)
       if (mpSkip(r)) return -1;
     return 0;
   }
@@ -187,21 +188,21 @@ int mpSkip(MpReader *r) {
   case 0xca:
     return mpSkipN(r, 4);
   case 0xd9: {
-    unsigned char n;
+    u8 n;
     if (mpByte(r, &n)) return -1;
     return mpSkipN(r, n);
   }
   case 0xda:
   case 0xdb: {
     // str16/32
-    long n = -1;
+    i64 n = -1;
     if (b == 0xda) {
       if (r->end - r->p < 2) return -1;
       n = (r->p[0] << 8) | r->p[1];
       r->p += 2;
     } else {
       if (r->end - r->p < 4) return -1;
-      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
     return mpSkipN(r, n);
@@ -209,34 +210,34 @@ int mpSkip(MpReader *r) {
   case 0xdc:
   case 0xdd: {
     // array16/32
-    long n = -1;
+    i64 n = -1;
     if (b == 0xdc) {
       if (r->end - r->p < 2) return -1;
       n = (r->p[0] << 8) | r->p[1];
       r->p += 2;
     } else {
       if (r->end - r->p < 4) return -1;
-      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
-    for (long i = 0; i < n; i++)
+    for (i64 i = 0; i < n; i++)
       if (mpSkip(r)) return -1;
     return 0;
   }
   case 0xde:
   case 0xdf: {
     // map16/32
-    long n = -1;
+    i64 n = -1;
     if (b == 0xde) {
       if (r->end - r->p < 2) return -1;
       n = (r->p[0] << 8) | r->p[1];
       r->p += 2;
     } else {
       if (r->end - r->p < 4) return -1;
-      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
-    for (long i = 0; i < n; i++) {
+    for (i64 i = 0; i < n; i++) {
       if (mpSkip(r)) return -1; // key
       if (mpSkip(r)) return -1; // value
     }
@@ -246,9 +247,9 @@ int mpSkip(MpReader *r) {
   case 0xc5:
   case 0xc6: {
     // bin8/16/32
-    long n = -1;
+    i64 n = -1;
     if (b == 0xc4) {
-      unsigned char m;
+      u8 m;
       if (mpByte(r, &m)) return -1;
       n = m;
     } else if (b == 0xc5) {
@@ -257,7 +258,7 @@ int mpSkip(MpReader *r) {
       r->p += 2;
     } else {
       if (r->end - r->p < 4) return -1;
-      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
     return mpSkipN(r, n);
@@ -269,17 +270,17 @@ int mpSkip(MpReader *r) {
 
 // Read next value as NUL-terminated string (str/bin families) or scalar
 // rendered as text (uint/int/float/bool/nil->"") into out, cut to cap-1.
-int mpStrVal(MpReader *r, char *out, size_t cap) {
+int mpStrVal(MpReader *r, char *out, usize cap) {
   if (r->p >= r->end) return -1;
-  unsigned char b = *r->p;
+  u8 b = *r->p;
   if ((b & 0xe0) == 0xa0 || b == 0xd9 || b == 0xda || b == 0xdb || b == 0xc4 || b == 0xc5 ||
       b == 0xc6) {
     r->p++;
-    long n;
+    i64 n;
     if ((b & 0xe0) == 0xa0) {
       n = b & 0x1f;
     } else if (b == 0xd9 || b == 0xc4) {
-      unsigned char m;
+      u8 m;
       if (mpByte(r, &m)) return -1;
       n = m;
     } else if (b == 0xda || b == 0xc5) {
@@ -288,11 +289,11 @@ int mpStrVal(MpReader *r, char *out, size_t cap) {
       r->p += 2;
     } else {
       if (r->end - r->p < 4) return -1;
-      n = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      n = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       r->p += 4;
     }
     if (r->end - r->p < n) return -1;
-    size_t keep = (size_t)n < cap ? (size_t)n : cap - 1;
+    usize keep = (usize)n < cap ? (usize)n : cap - 1;
     memcpy(out, r->p, keep);
     out[keep] = 0;
     r->p += n;
@@ -310,74 +311,74 @@ int mpStrVal(MpReader *r, char *out, size_t cap) {
   }
   if (b < 0x80 || b >= 0xe0 || b == 0xcc || b == 0xcd || b == 0xce || b == 0xcf || b == 0xd0 ||
       b == 0xd1 || b == 0xd2 || b == 0xd3) {
-    unsigned long long u = 0;
-    long long s = 0;
+    u64 u = 0;
+    i64 s = 0;
     int neg = 0;
     r->p++;
     if (b < 0x80) {
       u = b;
     } else if (b >= 0xe0) {
-      s = (signed char)b;
+      s = (i8)b;
       neg = 1;
     } else if (b == 0xcc) {
-      unsigned char m;
+      u8 m;
       if (mpByte(r, &m)) return -1;
       u = m;
     } else if (b == 0xcd) {
       if (r->end - r->p < 2) return -1;
-      u = ((unsigned)r->p[0] << 8) | r->p[1];
+      u = ((u32)r->p[0] << 8) | r->p[1];
       r->p += 2;
     } else if (b == 0xce) {
       if (r->end - r->p < 4) return -1;
-      u = ((unsigned long long)r->p[0] << 24) | ((unsigned long long)r->p[1] << 16) |
-          ((unsigned long long)r->p[2] << 8) | r->p[3];
+      u = ((u64)r->p[0] << 24) | ((u64)r->p[1] << 16) |
+          ((u64)r->p[2] << 8) | r->p[3];
       r->p += 4;
     } else if (b == 0xcf) {
       if (r->end - r->p < 8) return -1;
-      for (int i = 0; i < 8; i++) u = (u << 8) | *r->p++;
+      for (i32 i = 0; i < 8; i++) u = (u << 8) | *r->p++;
     } else if (b == 0xd0) {
-      signed char m;
-      if (mpByte(r, (unsigned char *)&m)) return -1;
+      i8 m;
+      if (mpByte(r, (u8 *)&m)) return -1;
       s = m;
       neg = 1;
     } else if (b == 0xd1) {
       if (r->end - r->p < 2) return -1;
-      s = (short)((r->p[0] << 8) | r->p[1]);
+      s = (i16)((r->p[0] << 8) | r->p[1]);
       neg = 1;
       r->p += 2;
     } else if (b == 0xd2) {
       if (r->end - r->p < 4) return -1;
-      s = ((long)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
+      s = ((i64)r->p[0] << 24) | (r->p[1] << 16) | (r->p[2] << 8) | r->p[3];
       neg = 1;
       r->p += 4;
     } else {
       if (r->end - r->p < 8) return -1;
-      unsigned long long m = 0;
-      for (int i = 0; i < 8; i++) m = (m << 8) | *r->p++;
-      s = (long long)m;
+      u64 m = 0;
+      for (i32 i = 0; i < 8; i++) m = (m << 8) | *r->p++;
+      s = (i64)m;
       neg = 1;
     }
     if (neg)
-      snprintf(out, cap, "%lld", s);
+      snprintf(out, cap, "%" PRId64, s);
     else
-      snprintf(out, cap, "%llu", u);
+      snprintf(out, cap, "%" PRIu64, u);
     return 0;
   }
   if (b == 0xca || b == 0xcb) {
     r->p++;
-    double v = 0;
+    f64 v = 0;
     if (b == 0xca) {
       if (r->end - r->p < 4) return -1;
-      unsigned u = ((unsigned)r->p[0] << 24) | ((unsigned)r->p[1] << 16) | ((unsigned)r->p[2] << 8) |
+      u32 u = ((u32)r->p[0] << 24) | ((u32)r->p[1] << 16) | ((u32)r->p[2] << 8) |
                    r->p[3];
       r->p += 4;
-      float f;
+      f32 f;
       memcpy(&f, &u, 4);
       v = f;
     } else {
       if (r->end - r->p < 8) return -1;
-      unsigned long long u = 0;
-      for (int i = 0; i < 8; i++) u = (u << 8) | *r->p++;
+      u64 u = 0;
+      for (i32 i = 0; i < 8; i++) u = (u << 8) | *r->p++;
       memcpy(&v, &u, 8);
     }
     snprintf(out, cap, "%g", v);

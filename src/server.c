@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <netinet/in.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,22 +27,22 @@ typedef enum { M_OTHER, M_GET, M_POST } HttpMethod;
 typedef struct {
   HttpMethod method;
   char path[1024], query[1024];
-  long content_length; // >= 0
+  i64 content_length; // >= 0
   char auth[512];
   char content_type[128];
 } Request;
 
-static void serverSendAll(int fd, const void *buf, size_t n) {
-  const unsigned char *p = buf;
+static void serverSendAll(int fd, const void *buf, usize n) {
+  const u8 *p = buf;
   while (n > 0) {
     ssize_t w = send(fd, p, n, 0);
     if (w <= 0) return;
     p += w;
-    n -= (size_t)w;
+    n -= (usize)w;
   }
 }
 
-static void serverReply(int fd, int code, const char *ctype, const void *body, long n) {
+static void serverReply(int fd, i32 code, const char *ctype, const void *body, i64 n) {
   const char *msg;
   switch (code) {
   case 200:
@@ -62,10 +63,10 @@ static void serverReply(int fd, int code, const char *ctype, const void *body, l
   }
   char hdr[512];
   int hlen = snprintf(hdr, sizeof hdr,
-                      "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
+                      "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %" PRId64 "\r\nConnection: close\r\n\r\n",
                       code, msg, ctype, n);
-  serverSendAll(fd, hdr, (size_t)hlen);
-  if (n > 0) serverSendAll(fd, body, (size_t)n);
+  serverSendAll(fd, hdr, (usize)hlen);
+  if (n > 0) serverSendAll(fd, body, (usize)n);
 }
 
 static int serverAuthed(const Request *r) {
@@ -77,21 +78,21 @@ static int serverAuthed(const Request *r) {
 
 // Read until "\r\n\r\n" or HDR_CAP. Returns header bytes, 0 on error (no
 // terminator in an empty block, so the caller's check covers it).
-static long serverReadHeaders(int fd, unsigned char *hdr) {
-  long got = 0;
+static i64 serverReadHeaders(int fd, u8 *hdr) {
+  i64 got = 0;
   while (got < HDR_CAP) {
-    ssize_t n = recv(fd, hdr + got, (size_t)(HDR_CAP - got), 0);
+    ssize_t n = recv(fd, hdr + got, (usize)(HDR_CAP - got), 0);
     if (n <= 0) return 0;
     got += n;
-    if (got >= 4 && memmem(hdr, (size_t)got, "\r\n\r\n", 4)) return got;
+    if (got >= 4 && memmem(hdr, (usize)got, "\r\n\r\n", 4)) return got;
   }
   return 0;
 }
 
 // Percent-decode the n-byte slice src into dst (dst size cap).
-static void serverUrlDecode(const char *src, size_t n, char *dst, size_t cap) {
-  size_t o = 0;
-  for (size_t i = 0; i < n && o + 1 < cap; i++) {
+static void serverUrlDecode(const char *src, usize n, char *dst, usize cap) {
+  usize o = 0;
+  for (usize i = 0; i < n && o + 1 < cap; i++) {
     if (src[i] == '%' && i + 2 < n && isxdigit((unsigned char)src[i + 1]) &&
         isxdigit((unsigned char)src[i + 2])) {
       char hex[3] = {src[i + 1], src[i + 2], 0};
@@ -106,14 +107,14 @@ static void serverUrlDecode(const char *src, size_t n, char *dst, size_t cap) {
   dst[o] = 0;
 }
 
-static void serverQueryVal(const char *q, const char *key, char *out, size_t cap) {
+static void serverQueryVal(const char *q, const char *key, char *out, usize cap) {
   out[0] = 0;
-  size_t klen = strlen(key);
+  usize klen = strlen(key);
   for (const char *p = q; *p;) {
     if (!strncmp(p, key, klen) && p[klen] == '=') {
       const char *v = p + klen + 1;
       const char *e = strchr(v, '&');
-      size_t n = e ? (size_t)(e - v) : strlen(v);
+      usize n = e ? (usize)(e - v) : strlen(v);
       serverUrlDecode(v, n, out, cap);
       return;
     }
@@ -133,10 +134,10 @@ static int serverParseRequest(char *hdr, Request *r) {
   if (!line) return -1;
 
   // request line: METHOD SP target [SP version]
-  size_t mlen = strcspn(line, " ");
+  usize mlen = strcspn(line, " ");
   if (mlen == 0 || line[mlen] != ' ') return -1;
   const char *target = line + mlen + 1;
-  size_t tlen = strcspn(target, " ");
+  usize tlen = strcspn(target, " ");
   if (tlen == 0) return -1;
   if (mlen == 3 && !memcmp(line, "GET", 3))
     r->method = M_GET;
@@ -145,8 +146,8 @@ static int serverParseRequest(char *hdr, Request *r) {
   else
     r->method = M_OTHER;
   const char *q = memchr(target, '?', tlen);
-  size_t plen = q ? (size_t)(q - target) : tlen;
-  size_t qlen = q ? tlen - plen - 1 : 0;
+  usize plen = q ? (usize)(q - target) : tlen;
+  usize qlen = q ? tlen - plen - 1 : 0;
   if (plen >= sizeof r->path || qlen >= sizeof r->query) return -1;
   memcpy(r->path, target, plen);
   r->path[plen] = 0;
@@ -178,15 +179,15 @@ static int serverParseRequest(char *hdr, Request *r) {
 }
 
 static void serverHandleConn(int fd) {
-  static unsigned char hdr[HDR_CAP + 1]; // single-threaded server
-  static unsigned char body[BODY_CAP];
-  long hlen = serverReadHeaders(fd, hdr);
+  static u8 hdr[HDR_CAP + 1]; // single-threaded server
+  static u8 body[BODY_CAP];
+  i64 hlen = serverReadHeaders(fd, hdr);
   hdr[hlen] = 0;
 
   // bound parsing to header region so strtok_r never touches body
   char *eoh = strstr((char *)hdr, "\r\n\r\n");
   if (!eoh) return;
-  long used = (long)(eoh - (char *)hdr) + 4;
+  i64 used = (i64)(eoh - (char *)hdr) + 4;
   *eoh = 0;
   Request r;
   if (serverParseRequest((char *)hdr, &r)) {
@@ -194,16 +195,16 @@ static void serverHandleConn(int fd) {
     return;
   }
 
-  long buffered = hlen - used;
+  i64 buffered = hlen - used;
   if (r.content_length > BODY_CAP) {
     serverReply(fd, 400, "text/plain", "body too large", 14);
     return;
   }
   // content_length is in [0, BODY_CAP] here
-  long have = buffered > r.content_length ? r.content_length : buffered;
-  memcpy(body, hdr + used, (size_t)have);
+  i64 have = buffered > r.content_length ? r.content_length : buffered;
+  memcpy(body, hdr + used, (usize)have);
   while (have < r.content_length) {
-    ssize_t n = recv(fd, body + have, (size_t)(r.content_length - have), 0);
+    ssize_t n = recv(fd, body + have, (usize)(r.content_length - have), 0);
     if (n <= 0) return;
     have += n;
   }
@@ -221,7 +222,7 @@ static void serverHandleConn(int fd) {
       if (dbPackEvents(since, until, &w)) {
         serverReply(fd, 500, "text/plain", "db error", 8);
       } else {
-        serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
+        serverReply(fd, 200, "application/msgpack", w.p, (i64)w.len);
       }
       free(w.p);
     }
@@ -242,10 +243,10 @@ static void serverHandleConn(int fd) {
           MpWriter w = {0};
           mpMap(&w, 2);
           mpStr(&w, "raw_id");
-          mpU64(&w, (unsigned long long)ing.id.v);
+          mpU64(&w, (u64)ing.id.v);
           mpStr(&w, "is_event");
           mpU64(&w, ing.is_event ? 1 : 0);
-          serverReply(fd, 200, "application/msgpack", w.p, (long)w.len);
+          serverReply(fd, 200, "application/msgpack", w.p, (i64)w.len);
           free(w.p);
         }
       }
@@ -265,7 +266,7 @@ int serverRun(void) {
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
   struct sockaddr_in addr = {0};
   addr.sin_family = AF_INET;
-  addr.sin_port = htons((uint16_t)g_port);
+  addr.sin_port = htons((u16)g_port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (bind(srv, (struct sockaddr *)&addr, sizeof addr) < 0) {
     perror("bind");

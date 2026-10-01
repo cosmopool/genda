@@ -64,8 +64,8 @@ TEST longStringUsesStr8(void) {
 // Every str8 length must decode exactly (length byte read as unsigned).
 TEST str8AllLengthsRoundTrip(void) {
   char big[256], v[256];
-  for (int n = 32; n < 256; n++) {
-    memset(big, 'y', (size_t)n);
+  for (i32 n = 32; n < 256; n++) {
+    memset(big, 'y', (usize)n);
     big[n] = 0;
     MpWriter w = {0};
     mpStr(&w, big);
@@ -100,14 +100,14 @@ TEST longValueIsCutAndConsumed(void) {
 }
 
 TEST headerLengthsRoundTrip(void) {
-  static const unsigned long ns[] = {0, 15, 16, 65535, 65536, 70000};
-  for (size_t i = 0; i < sizeof ns / sizeof ns[0]; i++) {
+  static const u64 ns[] = {0, 15, 16, 65535, 65536, 70000};
+  for (usize i = 0; i < sizeof ns / sizeof ns[0]; i++) {
     MpWriter w = {0};
     mpMap(&w, ns[i]);
     mpArr(&w, ns[i]);
     MpReader r = {w.p, w.p + w.len};
-    ASSERT_EQ((long)ns[i], mpHdrLen(&r, 0x80, 0xde, 0xdf));
-    ASSERT_EQ((long)ns[i], mpHdrLen(&r, 0x90, 0xdc, 0xdd));
+    ASSERT_EQ((i64)ns[i], mpHdrLen(&r, 0x80, 0xde, 0xdf));
+    ASSERT_EQ((i64)ns[i], mpHdrLen(&r, 0x90, 0xdc, 0xdd));
     free(w.p);
   }
   PASS();
@@ -141,15 +141,15 @@ TEST skipNestedValues(void) {
 
 TEST truncatedInputFails(void) {
   char v[32];
-  unsigned char cut[] = {0xa5, 'h', 'i'}; // fixstr(5) with 2 bytes
+  u8 cut[] = {0xa5, 'h', 'i'}; // fixstr(5) with 2 bytes
   MpReader r = {cut, cut + sizeof cut};
   ASSERT_EQ(-1, mpStrVal(&r, v, sizeof v));
-  unsigned char notmap[] = {0x01};
+  u8 notmap[] = {0x01};
   MpReader r2 = {notmap, notmap + 1};
   ASSERT_EQ(-1, mpHdrLen(&r2, 0x80, 0xde, 0xdf));
   MpReader r3 = {notmap, notmap + 0};
   ASSERT_EQ(-1, mpSkip(&r3));
-  unsigned char scalar[] = {0xc0, 0xc3, 0x2a};
+  u8 scalar[] = {0xc0, 0xc3, 0x2a};
   MpReader r4 = {scalar, scalar + sizeof scalar};
   ASSERT_EQ(0, mpStrVal(&r4, v, sizeof v));
   ASSERT_STR_EQ("", v);
