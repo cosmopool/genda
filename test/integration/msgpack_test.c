@@ -99,6 +99,20 @@ TEST longValueIsCutAndConsumed(void) {
   PASS();
 }
 
+TEST headerLengthsRoundTrip(void) {
+  static const unsigned long ns[] = {0, 15, 16, 65535, 65536, 70000};
+  for (size_t i = 0; i < sizeof ns / sizeof ns[0]; i++) {
+    MpWriter w = {0};
+    mpMap(&w, ns[i]);
+    mpArr(&w, ns[i]);
+    MpReader r = {w.p, w.p + w.len};
+    ASSERT_EQ((long)ns[i], mpHdrLen(&r, 0x80, 0xde, 0xdf));
+    ASSERT_EQ((long)ns[i], mpHdrLen(&r, 0x90, 0xdc, 0xdd));
+    free(w.p);
+  }
+  PASS();
+}
+
 TEST skipNestedValues(void) {
   MpWriter w = {0};
   mpMap(&w, 2);
@@ -154,6 +168,7 @@ int main(int argc, char **argv) {
   RUN_TEST(longStringUsesStr8);
   RUN_TEST(str8AllLengthsRoundTrip);
   RUN_TEST(longValueIsCutAndConsumed);
+  RUN_TEST(headerLengthsRoundTrip);
   RUN_TEST(skipNestedValues);
   RUN_TEST(truncatedInputFails);
   GREATEST_MAIN_END();

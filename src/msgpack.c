@@ -28,8 +28,17 @@ void mpMap(MpWriter *w, unsigned long n) {
     mpB(w, (unsigned char)(0x80 | n));
     return;
   }
-  mpReserve(w, 3);
-  w->p[w->len++] = 0xde;
+  if (n <= 0xffff) {
+    mpReserve(w, 3);
+    w->p[w->len++] = 0xde;
+    w->p[w->len++] = (unsigned char)(n >> 8);
+    w->p[w->len++] = (unsigned char)n;
+    return;
+  }
+  mpReserve(w, 5);
+  w->p[w->len++] = 0xdf;
+  w->p[w->len++] = (unsigned char)(n >> 24);
+  w->p[w->len++] = (unsigned char)(n >> 16);
   w->p[w->len++] = (unsigned char)(n >> 8);
   w->p[w->len++] = (unsigned char)n;
 }
@@ -39,8 +48,17 @@ void mpArr(MpWriter *w, unsigned long n) {
     mpB(w, (unsigned char)(0x90 | n));
     return;
   }
-  mpReserve(w, 3);
-  w->p[w->len++] = 0xdc;
+  if (n <= 0xffff) {
+    mpReserve(w, 3);
+    w->p[w->len++] = 0xdc;
+    w->p[w->len++] = (unsigned char)(n >> 8);
+    w->p[w->len++] = (unsigned char)n;
+    return;
+  }
+  mpReserve(w, 5);
+  w->p[w->len++] = 0xdd;
+  w->p[w->len++] = (unsigned char)(n >> 24);
+  w->p[w->len++] = (unsigned char)(n >> 16);
   w->p[w->len++] = (unsigned char)(n >> 8);
   w->p[w->len++] = (unsigned char)n;
 }
