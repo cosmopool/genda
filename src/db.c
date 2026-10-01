@@ -11,6 +11,10 @@
 #include <string.h>
 #include <time.h>
 
+// Text binds are SQLITE_STATIC: every bound buffer (caller-owned struct,
+// caller string, literal or local array) outlives its statement, which is
+// finalized before the binding function returns.
+
 void dbUtcNow(char *out, size_t n) {
   time_t t = time(NULL);
   struct tm tm;
@@ -92,20 +96,20 @@ static RawId dbStoreRaw(const Input *in) {
                     "(source,ext_id,app,title,text,from_addr,received_at)"
                     " VALUES(?,?,?,?,?,?,?);";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return id;
-  sqlite3_bind_text(st, 1, in->source, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 2, in->ext_id, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 3, in->app, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 4, in->title, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 5, in->text, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 6, in->from, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 7, in->time, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 1, in->source, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 2, in->ext_id, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 3, in->app, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 4, in->title, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 5, in->text, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 6, in->from, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 7, in->time, -1, SQLITE_STATIC);
   int rc = sqlite3_step(st);
   sqlite3_finalize(st);
   if (rc != SQLITE_DONE && rc != SQLITE_CONSTRAINT) return id;
   st = NULL;
   if (sqlite3_prepare_v2(g_db, "SELECT id FROM raw_inputs WHERE ext_id=?;", -1, &st, NULL))
     return id;
-  sqlite3_bind_text(st, 1, in->ext_id, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 1, in->ext_id, -1, SQLITE_STATIC);
   if (sqlite3_step(st) == SQLITE_ROW) id.v = sqlite3_column_int64(st, 0);
   sqlite3_finalize(st);
   return id;
@@ -126,13 +130,13 @@ static int dbStoreEvent(RawId raw_id, const Classified *c) {
                     " WHERE NOT EXISTS (SELECT 1 FROM events WHERE raw_id=?1);";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
   sqlite3_bind_int64(st, 1, raw_id.v);
-  sqlite3_bind_text(st, 2, c->title, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 3, c->starts_at, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 4, c->deadline, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 5, c->location, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 6, db_kind_text[c->kind], -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, c->title, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 3, c->starts_at, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 4, c->deadline, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 5, c->location, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 6, db_kind_text[c->kind], -1, SQLITE_STATIC);
   sqlite3_bind_double(st, 7, c->confidence);
-  sqlite3_bind_text(st, 8, now, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 8, now, -1, SQLITE_STATIC);
   int rc = sqlite3_step(st);
   sqlite3_finalize(st);
   return rc == SQLITE_DONE ? 0 : -1;
@@ -158,46 +162,50 @@ Ingest dbIngest(const Input *in) {
 // Pack all events in range as msgpack array. since/until "" = unbounded.
 int dbPackEvents(const char *since, const char *until, MpWriter *w) {
   sqlite3_stmt *st = NULL;
-  const char *sql = "SELECT id,raw_id,title,starts_at,deadline,location,kind,confidence,created_at"
+  // COALESCE: text columns may be NULL; mpStr needs a string.
+  const char *sql = "SELECT id,raw_id,COALESCE(title,''),COALESCE(starts_at,''),"
+                    "COALESCE(deadline,''),COALESCE(location,''),COALESCE(kind,''),"
+                    "confidence,COALESCE(created_at,'')"
                     " FROM events WHERE (?1='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)>=?1)"
                     " AND (?2='' OR COALESCE(NULLIF(starts_at,''),NULLIF(deadline,''),created_at)<=?2)"
                     " ORDER BY created_at,id;";
   if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL)) return -1;
-  sqlite3_bind_text(st, 1, since, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(st, 2, until, -1, SQLITE_TRANSIENT);
-  MpWriter items = {0};
+  sqlite3_bind_text(st, 1, since, -1, SQLITE_STATIC);
+  sqlite3_bind_text(st, 2, until, -1, SQLITE_STATIC);
+  // array32 header with a count placeholder, patched after the loop, so rows
+  // encode straight into w. Index, not pointer: w->p may move on realloc.
+  mpReserve(w, 5);
+  size_t hdr_at = w->len;
+  w->p[w->len++] = 0xdd;
+  w->len += 4;
   unsigned long count = 0;
-  const char *keys[7] = {"title", "starts_at", "deadline", "location", "kind", "", "created_at"};
   while (sqlite3_step(st) == SQLITE_ROW) {
-    const char *cols[7] = {(const char *)sqlite3_column_text(st, 2),
-                           (const char *)sqlite3_column_text(st, 3),
-                           (const char *)sqlite3_column_text(st, 4),
-                           (const char *)sqlite3_column_text(st, 5),
-                           (const char *)sqlite3_column_text(st, 6),
-                           NULL,
-                           (const char *)sqlite3_column_text(st, 8)};
-    mpMap(&items, 9);
-    mpStr(&items, "id");
-    mpU64(&items, (unsigned long long)sqlite3_column_int64(st, 0));
-    mpStr(&items, "raw_id");
-    mpU64(&items, (unsigned long long)sqlite3_column_int64(st, 1));
-    for (int i = 0; i < 7; i++) {
-      if (i == 5) continue;
-      mpStr(&items, keys[i]);
-      mpStr(&items, cols[i] ? cols[i] : "");
-    }
-    mpStr(&items, "confidence");
-    mpF64(&items, sqlite3_column_double(st, 7));
+    mpMap(w, 9);
+    mpStr(w, "id");
+    mpU64(w, (unsigned long long)sqlite3_column_int64(st, 0));
+    mpStr(w, "raw_id");
+    mpU64(w, (unsigned long long)sqlite3_column_int64(st, 1));
+    mpStr(w, "title");
+    mpStr(w, (const char *)sqlite3_column_text(st, 2));
+    mpStr(w, "starts_at");
+    mpStr(w, (const char *)sqlite3_column_text(st, 3));
+    mpStr(w, "deadline");
+    mpStr(w, (const char *)sqlite3_column_text(st, 4));
+    mpStr(w, "location");
+    mpStr(w, (const char *)sqlite3_column_text(st, 5));
+    mpStr(w, "kind");
+    mpStr(w, (const char *)sqlite3_column_text(st, 6));
+    mpStr(w, "created_at");
+    mpStr(w, (const char *)sqlite3_column_text(st, 8));
+    mpStr(w, "confidence");
+    mpF64(w, sqlite3_column_double(st, 7));
     count++;
   }
   sqlite3_finalize(st);
-  mpArr(w, count);
-  if (count) {
-    mpReserve(w, items.len);
-    memcpy(w->p + w->len, items.p, items.len);
-    w->len += items.len;
-  }
-  free(items.p);
+  w->p[hdr_at + 1] = (unsigned char)(count >> 24);
+  w->p[hdr_at + 2] = (unsigned char)(count >> 16);
+  w->p[hdr_at + 3] = (unsigned char)(count >> 8);
+  w->p[hdr_at + 4] = (unsigned char)count;
   return 0;
 }
 
@@ -218,7 +226,7 @@ void dbMetaUidSet(ImapUid uid) {
   sqlite3_stmt *st = NULL;
   if (!sqlite3_prepare_v2(g_db, "INSERT OR REPLACE INTO meta(k,v) VALUES('imap_last_uid',?);",
                           -1, &st, NULL)) {
-    sqlite3_bind_text(st, 1, v, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 1, v, -1, SQLITE_STATIC);
     sqlite3_step(st);
     sqlite3_finalize(st);
   }

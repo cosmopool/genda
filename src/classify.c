@@ -9,10 +9,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static void classifyLowerCopy(const char *src, char *dst, size_t cap) {
+// Lowercase src into dst (cap >= 1), cut to cap-1. Returns bytes written.
+static size_t classifyLowerCopy(const char *src, char *dst, size_t cap) {
   size_t i = 0;
   for (; src[i] && i + 1 < cap; i++) dst[i] = (char)tolower((unsigned char)src[i]);
   dst[i] = 0;
+  return i;
 }
 
 static int classifyContainsAny(const char *hay, const char *words[]) {
@@ -44,10 +46,11 @@ static int classifyScanIsoDate(const char *s, char *out, size_t cap) {
 // c arrives zeroed.
 static void classifyHeuristic(const Input *in, Classified *c) {
   snprintf(c->title, sizeof c->title, "%s", in->title[0] ? in->title : in->text);
-  char hay[4608];
-  char tmp[4608];
-  snprintf(tmp, sizeof tmp, "%s %s", in->title, in->text);
-  classifyLowerCopy(tmp, hay, sizeof hay);
+  // lowercased "title text"; fits whole: title < sizeof title, text < sizeof text
+  char hay[sizeof in->title + sizeof in->text];
+  size_t n = classifyLowerCopy(in->title, hay, sizeof hay);
+  hay[n++] = ' ';
+  classifyLowerCopy(in->text, hay + n, sizeof hay - n);
   static const char *appt[] = {"meeting",  "appointment", "call",     "interview", "dentist",
                                "doctor",   "flight",      "booking",  "reservation", "conference",
                                "webinar",  "standup",     "ceremony", "party",     NULL};

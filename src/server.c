@@ -88,18 +88,19 @@ static long serverReadHeaders(int fd, unsigned char *hdr) {
   return 0;
 }
 
-// Percent-decode src into dst (dst size cap).
-static void serverUrlDecode(const char *src, char *dst, size_t cap) {
+// Percent-decode the n-byte slice src into dst (dst size cap).
+static void serverUrlDecode(const char *src, size_t n, char *dst, size_t cap) {
   size_t o = 0;
-  for (; *src && o + 1 < cap; src++) {
-    if (*src == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
-      char hex[3] = {src[1], src[2], 0};
+  for (size_t i = 0; i < n && o + 1 < cap; i++) {
+    if (src[i] == '%' && i + 2 < n && isxdigit((unsigned char)src[i + 1]) &&
+        isxdigit((unsigned char)src[i + 2])) {
+      char hex[3] = {src[i + 1], src[i + 2], 0};
       dst[o++] = (char)strtol(hex, NULL, 16);
-      src += 2;
-    } else if (*src == '+') {
+      i += 2;
+    } else if (src[i] == '+') {
       dst[o++] = ' ';
     } else {
-      dst[o++] = *src;
+      dst[o++] = src[i];
     }
   }
   dst[o] = 0;
@@ -113,11 +114,7 @@ static void serverQueryVal(const char *q, const char *key, char *out, size_t cap
       const char *v = p + klen + 1;
       const char *e = strchr(v, '&');
       size_t n = e ? (size_t)(e - v) : strlen(v);
-      char tmp[1024];
-      if (n >= sizeof tmp) n = sizeof tmp - 1;
-      memcpy(tmp, v, n);
-      tmp[n] = 0;
-      serverUrlDecode(tmp, out, cap);
+      serverUrlDecode(v, n, out, cap);
       return;
     }
     p = strchr(p, '&');
