@@ -107,7 +107,9 @@ static void imapPollOnce(CURL *ch, CurlBuf *s, CurlBuf *h, CurlBuf *t) {
     snprintf(cmd, sizeof cmd, "UID FETCH %ld BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)]",
              uid.v);
     if (imapCmd(ch, cmd, h)) break;
-    snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]", uid.v);
+    // first 4 KB only: Input.text keeps no more, and a huge body must not
+    // fail the fetch and stall the poll on this uid forever
+    snprintf(fetch, sizeof fetch, "UID FETCH %ld BODY.PEEK[TEXT]<0.4096>", uid.v);
     if (imapCmd(ch, fetch, t)) break;
     Input in = imapParseInput(h->p, t->p, uid);
     Ingest ing = dbIngest(&in);
