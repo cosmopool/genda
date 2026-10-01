@@ -20,7 +20,7 @@ $(OBJS): $(HDRS)
 test: genda test_integration
 	./test_integration
 
-test_integration: src/test_integration.c
+test_integration: test/test_integration.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 clean:
